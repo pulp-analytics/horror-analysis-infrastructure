@@ -1,0 +1,308 @@
+{
+  "Comment": "Runs pulp-analytics/horror-corpus-validation's scripts/01-10 as Fargate tasks, respecting the real dependency graph documented in that repo's README (only 01→{02,03,07,08}, 02→{04,08}, 04→{05,09}, 05→06 are real dependencies -- everything else that used to run sequentially via subprocess.run in 10_validate_corpus.py runs in parallel here instead). REPLACE_WITH_* placeholders need your own cluster/task-def/subnet/security-group ids -- see docs/ARCHITECTURE.md.",
+  "StartAt": "Enumerate",
+  "States": {
+    "Enumerate": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+        "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [{
+            "Name": "validator",
+            "Command.$": "States.Array('python3', 'scripts/01_tmdb_enumerate.py', '--genre', States.Format('{}', $.genre), '--start-year', States.Format('{}', $.startYear), '--end-year', States.Format('{}', $.endYear), '--limit', States.Format('{}', $.limit), '--out', $.idsPath)"
+          }]
+        }
+      },
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2.0 }],
+      "Next": "IndependentGates"
+    },
+
+    "IndependentGates": {
+      "Type": "Parallel",
+      "Comment": "03, 07, and the 02-rooted poster-verification branch only depend on 01's output -- none of them need each other, so they run concurrently instead of the strict 02→03→04→... order 10_validate_corpus.py used when it ran everything itself.",
+      "Branches": [
+        {
+          "StartAt": "FetchAltTitles",
+          "States": {
+            "FetchAltTitles": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [{
+                    "Name": "validator",
+                    "Command.$": "States.Array('python3', 'scripts/03_fetch_alt_titles.py', '--in', $.idsPath, '--out', $.altTitlesPath)"
+                  }]
+                }
+              },
+              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "DedupeMetadata",
+          "States": {
+            "DedupeMetadata": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [{
+                    "Name": "validator",
+                    "Command.$": "States.Array('python3', 'scripts/07_dedupe_tmdb_metadata.py', '--in', $.idsPath, '--out', $.duplicateResolutionPath, '--cache', $.tmdbDedupeCachePath)"
+                  }]
+                }
+              },
+              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "VerifyPoster",
+          "States": {
+            "VerifyPoster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [{
+                    "Name": "validator",
+                    "Command.$": "States.Array('python3', 'scripts/02_verify_poster_exists.py', '--in', $.idsPath, '--out', $.verifiedPath)"
+                  }]
+                }
+              },
+              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+              "Next": "AfterVerify"
+            },
+            "AfterVerify": {
+              "Type": "Parallel",
+              "Comment": "04 and 08 are the only two steps that download the poster image itself, so both -- and only both -- depend on 02's verified=1 result (see 04/08's --verified flag in horror-corpus-validation).",
+              "Branches": [
+                {
+                  "StartAt": "BedrockOCR",
+                  "States": {
+                    "BedrockOCR": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::ecs:runTask.sync",
+                      "Parameters": {
+                        "LaunchType": "FARGATE",
+                        "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                        "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                        "NetworkConfiguration": {
+                          "AwsvpcConfiguration": {
+                            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                            "AssignPublicIp": "ENABLED"
+                          }
+                        },
+                        "Overrides": {
+                          "ContainerOverrides": [{
+                            "Name": "validator",
+                            "Command.$": "States.Array('python3', 'scripts/04_bedrock_ocr.py', '--in', $.idsPath, '--out', $.visionPath, '--verified', $.verifiedPath, '--model', $.bedrockModelId)"
+                          }]
+                        }
+                      },
+                      "Retry": [
+                        { "ErrorEquals": ["States.ALL"], "IntervalSeconds": 60, "MaxAttempts": 4, "BackoffRate": 2.0 }
+                      ],
+                      "Comment": "longer backoff than the other steps -- Bedrock throttling (ThrottlingException) under concurrent load is the most likely transient failure here",
+                      "Next": "AfterBedrock"
+                    },
+                    "AfterBedrock": {
+                      "Type": "Parallel",
+                      "Comment": "05→06 and 09 both only need 04's vision_title_check.csv -- neither needs the other's output.",
+                      "Branches": [
+                        {
+                          "StartAt": "ComprehendLanguage",
+                          "States": {
+                            "ComprehendLanguage": {
+                              "Type": "Task",
+                              "Resource": "arn:aws:states:::ecs:runTask.sync",
+                              "Parameters": {
+                                "LaunchType": "FARGATE",
+                                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                                "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                                "NetworkConfiguration": {
+                                  "AwsvpcConfiguration": {
+                                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                                    "AssignPublicIp": "ENABLED"
+                                  }
+                                },
+                                "Overrides": {
+                                  "ContainerOverrides": [{
+                                    "Name": "validator",
+                                    "Command.$": "States.Array('python3', 'scripts/05_comprehend_language.py', '--in', $.visionPath, '--out', $.languagePath)"
+                                  }]
+                                }
+                              },
+                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+                              "Next": "TranslateTitles"
+                            },
+                            "TranslateTitles": {
+                              "Type": "Task",
+                              "Resource": "arn:aws:states:::ecs:runTask.sync",
+                              "Parameters": {
+                                "LaunchType": "FARGATE",
+                                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                                "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                                "NetworkConfiguration": {
+                                  "AwsvpcConfiguration": {
+                                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                                    "AssignPublicIp": "ENABLED"
+                                  }
+                                },
+                                "Overrides": {
+                                  "ContainerOverrides": [{
+                                    "Name": "validator",
+                                    "Command.$": "States.Array('python3', 'scripts/06_translate_titles.py', '--in', $.languagePath, '--titles', $.idsPath, '--out', $.translatedPath)"
+                                  }]
+                                }
+                              },
+                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+                              "End": true
+                            }
+                          }
+                        },
+                        {
+                          "StartAt": "CollapseCompilations",
+                          "States": {
+                            "CollapseCompilations": {
+                              "Type": "Task",
+                              "Resource": "arn:aws:states:::ecs:runTask.sync",
+                              "Parameters": {
+                                "LaunchType": "FARGATE",
+                                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                                "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                                "NetworkConfiguration": {
+                                  "AwsvpcConfiguration": {
+                                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                                    "AssignPublicIp": "ENABLED"
+                                  }
+                                },
+                                "Overrides": {
+                                  "ContainerOverrides": [{
+                                    "Name": "validator",
+                                    "Command.$": "States.Array('python3', 'scripts/09_collapse_compilations.py', '--in', $.visionPath, '--out', $.compilationGroupsPath, '--cache', $.compilationCachePath)"
+                                  }]
+                                }
+                              },
+                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+                              "End": true
+                            }
+                          }
+                        }
+                      ],
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "DedupePosterMD5",
+                  "States": {
+                    "DedupePosterMD5": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::ecs:runTask.sync",
+                      "Parameters": {
+                        "LaunchType": "FARGATE",
+                        "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+                        "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+                        "NetworkConfiguration": {
+                          "AwsvpcConfiguration": {
+                            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+                            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                            "AssignPublicIp": "ENABLED"
+                          }
+                        },
+                        "Overrides": {
+                          "ContainerOverrides": [{
+                            "Name": "validator",
+                            "Command.$": "States.Array('python3', 'scripts/08_dedupe_poster_md5.py', '--in', $.idsPath, '--out', $.posterMd5DuplicatesPath, '--cache', $.posterMd5CachePath, '--verified', $.verifiedPath)"
+                          }]
+                        }
+                      },
+                      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
+                      "End": true
+                    }
+                  }
+                }
+              ],
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "Assemble"
+    },
+
+    "Assemble": {
+      "Type": "Task",
+      "Comment": "The only step that isn't a Fargate RunTask -- horror-corpus-validation's 10_validate_corpus.py --assemble-only just reads the files every branch above already wrote and produces validated_corpus.csv/excluded_ids.csv/qa_report.json. Runs as its own (tiny, cheap) Fargate task rather than a Lambda so it shares the same container image and IAM role as every other step.",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "REPLACE_WITH_CLUSTER_ARN",
+        "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
+            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [{
+            "Name": "validator",
+            "Command.$": "States.Array('python3', 'scripts/10_validate_corpus.py', '--assemble-only', '--genre', States.Format('{}', $.genre), '--ids-path', $.idsPath)"
+          }]
+        }
+      },
+      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
+      "End": true
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "_comment": "Every state in statemachine/validate_corpus.asl.json runs THIS task definition -- same image, same role, same EFS mount -- and picks which script to run via the ECS RunTask ContainerOverrides.Command. The EFS mount is not optional: Step Functions launches each script (01-10) as a separate Fargate task with its own throwaway container filesystem, so without a shared volume, 05_comprehend_language.py would never see the vision_title_check.csv that 04_bedrock_ocr.py wrote in a different task. Mounting the same EFS access point at the repo's data/ path on every task is what makes 10_validate_corpus.py's --in/--out file-based handoff between scripts work exactly the same way it does when you run them all in one process locally.",
+  "family": "horror-corpus-validator",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "1024",
+  "memory": "3072",
+  "executionRoleArn": "REPLACE_WITH_EXECUTION_ROLE_ARN",
+  "taskRoleArn": "REPLACE_WITH_TASK_ROLE_ARN",
+  "volumes": [
+    {
+      "name": "validation-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "REPLACE_WITH_EFS_FILESYSTEM_ID",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "REPLACE_WITH_EFS_ACCESS_POINT_ID",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "validator",
+      "image": "REPLACE_WITH_ECR_IMAGE_URI",
+      "essential": true,
+      "workingDirectory": "/app",
+      "mountPoints": [
+        {
+          "sourceVolume": "validation-data",
+          "containerPath": "/app/data",
+          "readOnly": false
+        }
+      ],
+      "secrets": [
+        {
+          "name": "TMDB_API_KEY",
+          "valueFrom": "REPLACE_WITH_SECRETS_MANAGER_ARN_FOR_TMDB_KEY"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/horror-corpus-validator",
+          "awslogs-region": "REPLACE_WITH_REGION",
+          "awslogs-stream-prefix": "validator"
+        }
+      }
+    }
+  ]
+}

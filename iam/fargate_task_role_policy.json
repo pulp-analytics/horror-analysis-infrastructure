@@ -1,0 +1,40 @@
+{
+  "_comment": "Attach to the ECS TASK role (taskRoleArn in ecs/task-definition.json) -- this is what the Python scripts themselves assume at runtime via boto3. Deliberately narrow: only the three AWS services horror-corpus-validation's scripts actually call (Bedrock Converse in 04, Comprehend in 05, Translate in 06), plus the EFS access the shared data/ mount needs. No S3, no EC2, no IAM, nothing account-wide -- see docs/COST_SAFETY.md for why that separation matters on this project specifically.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockConverseOnly",
+      "Effect": "Allow",
+      "Action": ["bedrock:InvokeModel", "bedrock:Converse"],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:*::foundation-model/amazon.nova-lite-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/us.amazon.nova-lite-v1:0"
+      ]
+    },
+    {
+      "Sid": "ComprehendLanguageDetectionOnly",
+      "Effect": "Allow",
+      "Action": "comprehend:DetectDominantLanguage",
+      "Resource": "*",
+      "_comment": "Comprehend's detect-dominant-language API doesn't support resource-level restriction -- Resource must be *. Scoped down to a single read-only API action instead."
+    },
+    {
+      "Sid": "TranslateTextOnly",
+      "Effect": "Allow",
+      "Action": "translate:TranslateText",
+      "Resource": "*",
+      "_comment": "Same as Comprehend above -- Translate has no resource-level ARNs, scoped to a single action instead."
+    },
+    {
+      "Sid": "SharedDataVolume",
+      "Effect": "Allow",
+      "Action": ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"],
+      "Resource": "REPLACE_WITH_EFS_FILESYSTEM_ARN",
+      "Condition": {
+        "StringEquals": { "elasticfilesystem:AccessPointArn": "REPLACE_WITH_EFS_ACCESS_POINT_ARN" }
+      }
+    }
+  ]
+}
