@@ -1,5 +1,5 @@
 {
-  "_comment": "Attach to the Step Functions state machine's own execution role -- distinct from both ECS roles above. This is what lets the .sync ECS RunTask integration in statemachine/validate_corpus.asl.json actually launch tasks and wait for them to finish (the events:* actions are for the EventBridge rule Step Functions manages internally for the .sync pattern -- not something you create yourself).",
+  "_comment": "Attach to the Step Functions state machine's own execution role -- distinct from both ECS roles and the Batch job role. This is what lets the .sync ECS RunTask integration (01/07/08/09/Assemble/MergeShards) and the .sync Batch SubmitJob integration (02-06's array jobs) actually launch work and wait for it to finish. The events:* actions are for the two EventBridge managed rules Step Functions creates internally for each .sync pattern -- not something you create yourself.",
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -12,7 +12,13 @@
       }
     },
     {
-      "Sid": "PassRolesToEcs",
+      "Sid": "SubmitAndTrackBatchArrayJobs",
+      "Effect": "Allow",
+      "Action": ["batch:SubmitJob", "batch:DescribeJobs", "batch:TerminateJob"],
+      "Resource": ["REPLACE_WITH_JOB_DEFINITION_ARN", "REPLACE_WITH_JOB_QUEUE_ARN"]
+    },
+    {
+      "Sid": "PassRolesToEcsAndBatch",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": ["REPLACE_WITH_TASK_ROLE_ARN", "REPLACE_WITH_EXECUTION_ROLE_ARN"]
@@ -22,6 +28,12 @@
       "Effect": "Allow",
       "Action": ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
       "Resource": "arn:aws:events:*:*:rule/StepFunctionsGetEventsForECSTaskRule"
+    },
+    {
+      "Sid": "BatchSyncIntegrationEvents",
+      "Effect": "Allow",
+      "Action": ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
+      "Resource": "arn:aws:events:*:*:rule/StepFunctionsGetEventForBatchJobsRule"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "_comment": "Attach to the ECS TASK role (taskRoleArn in ecs/task-definition.json) -- this is what the Python scripts themselves assume at runtime via boto3. Deliberately narrow: only the three AWS services horror-corpus-validation's scripts actually call (Bedrock Converse in 04, Comprehend in 05, Translate in 06), plus the EFS access the shared data/ mount needs. No S3, no EC2, no IAM, nothing account-wide -- see docs/COST_SAFETY.md for why that separation matters on this project specifically.",
+  "_comment": "Attach to the ECS TASK role (taskRoleArn in ecs/task-definition.json) AND the Batch job role (jobRoleArn in batch/job-definition.json) -- same permissions either way, since it's the same Python code running via boto3 whether it's launched as a single ECS task (01/07/08/09/Assemble) or a Batch array job shard (02-06). Deliberately narrow: only the three AWS services horror-corpus-validation's scripts actually call (Bedrock Converse in 04, Comprehend in 05, Translate in 06), plus the EFS access the shared data/ mount needs. No S3, no EC2, no IAM, nothing account-wide -- see docs/COST_SAFETY.md for why that separation matters on this project specifically.",
   "Version": "2012-10-17",
   "Statement": [
     {

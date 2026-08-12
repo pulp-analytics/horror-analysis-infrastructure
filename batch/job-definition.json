@@ -1,0 +1,43 @@
+{
+  "_comment": "One job definition, reused for all five shardable scripts (02-06) -- same image as ecs/task-definition.json (and same EFS mount, for the same reason: shards write to data/ on shared storage, and the merge step afterward reads all of them from there). Which script runs, and the --shard-index/--shard-count values, are set per submission via containerOverrides in statemachine/validate_corpus.asl.json, not baked in here.",
+  "jobDefinitionName": "horror-corpus-validator",
+  "type": "container",
+  "platformCapabilities": ["FARGATE"],
+  "containerProperties": {
+    "image": "REPLACE_WITH_ECR_IMAGE_URI",
+    "jobRoleArn": "REPLACE_WITH_TASK_ROLE_ARN",
+    "executionRoleArn": "REPLACE_WITH_EXECUTION_ROLE_ARN",
+    "resourceRequirements": [
+      {"type": "VCPU", "value": "1"},
+      {"type": "MEMORY", "value": "3072"}
+    ],
+    "networkConfiguration": {"assignPublicIp": "ENABLED"},
+    "volumes": [
+      {
+        "name": "validation-data",
+        "efsVolumeConfiguration": {
+          "fileSystemId": "REPLACE_WITH_EFS_FILESYSTEM_ID",
+          "transitEncryption": "ENABLED",
+          "authorizationConfig": {
+            "accessPointId": "REPLACE_WITH_EFS_ACCESS_POINT_ID",
+            "iam": "ENABLED"
+          }
+        }
+      }
+    ],
+    "mountPoints": [
+      {"sourceVolume": "validation-data", "containerPath": "/app/data", "readOnly": false}
+    ],
+    "secrets": [
+      {"name": "TMDB_API_KEY", "valueFrom": "REPLACE_WITH_SECRETS_MANAGER_ARN_FOR_TMDB_KEY"}
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/batch/horror-corpus-validator",
+        "awslogs-region": "REPLACE_WITH_REGION",
+        "awslogs-stream-prefix": "validator"
+      }
+    }
+  }
+}

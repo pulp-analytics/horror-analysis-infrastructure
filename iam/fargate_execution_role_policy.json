@@ -1,5 +1,5 @@
 {
-  "_comment": "Attach to the ECS EXECUTION role (executionRoleArn in ecs/task-definition.json) -- this is what ECS itself assumes to pull the image and set up logging/secrets BEFORE your code runs. Different role from fargate_task_role_policy.json on purpose: the task role is what your Python code can do; this is what ECS needs to do to start the container at all. Mixing the two would give the running script more access than it needs (e.g. no reason for the OCR/translate code to be able to read Secrets Manager directly -- ECS injects TMDB_API_KEY as an env var before the script ever starts).",
+  "_comment": "Attach to the ECS EXECUTION role (executionRoleArn in ecs/task-definition.json) AND the Batch execution role (executionRoleArn in batch/job-definition.json) -- this is what ECS/Batch itself assumes to pull the image and set up logging/secrets BEFORE your code runs. Different role from fargate_task_role_policy.json on purpose: the task/job role is what your Python code can do; this is what the platform needs to do to start the container at all. Mixing the two would give the running script more access than it needs (e.g. no reason for the OCR/translate code to be able to read Secrets Manager directly -- ECS/Batch injects TMDB_API_KEY as an env var before the script ever starts).",
   "Version": "2012-10-17",
   "Statement": [
     {
@@ -17,7 +17,10 @@
       "Sid": "WriteContainerLogs",
       "Effect": "Allow",
       "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-      "Resource": "arn:aws:logs:*:*:log-group:/ecs/horror-corpus-validator:*"
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/ecs/horror-corpus-validator:*",
+        "arn:aws:logs:*:*:log-group:/batch/horror-corpus-validator:*"
+      ]
     },
     {
       "Sid": "ReadTmdbApiKeySecret",

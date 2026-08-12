@@ -1,0 +1,13 @@
+{
+  "_comment": "Fargate-based Batch compute environment -- same underlying compute as the ECS tasks in ecs/task-definition.json (for 01/07/08/09/Assemble), so this repo has one compute model throughout, not two. FARGATE_SPOT would cut cost further for the array jobs (02-06) at the price of occasional task interruption, which is safe here specifically because those scripts are resumable and re-running them just skips already-done ids -- see docs/ARCHITECTURE.md before switching. serviceRole: verify against current AWS docs whether this is required for a FARGATE-type environment (it has historically been optional, defaulting to the AWSServiceRoleForBatch service-linked role) before filling in a real ARN.",
+  "computeEnvironmentName": "horror-corpus-validator",
+  "type": "MANAGED",
+  "state": "ENABLED",
+  "computeResources": {
+    "type": "FARGATE",
+    "maxvCpus": 64,
+    "subnets": ["REPLACE_WITH_SUBNET_ID"],
+    "securityGroupIds": ["REPLACE_WITH_SECURITY_GROUP_ID"]
+  },
+  "serviceRole": "REPLACE_WITH_BATCH_SERVICE_ROLE_ARN"
+}
