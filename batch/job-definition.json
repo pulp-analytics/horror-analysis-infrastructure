@@ -1,8 +1,9 @@
 {
-  "_comment": "One job definition, reused for all five shardable scripts (02-06) -- same image as ecs/task-definition.json (and same EFS mount, for the same reason: shards write to data/ on shared storage, and the merge step afterward reads all of them from there). Which script runs, and the --shard-index/--shard-count values, are set per submission via containerOverrides in statemachine/validate_corpus.asl.json, not baked in here.",
+  "_comment": "One job definition, reused for all five shardable scripts (02-06) -- same image as ecs/task-definition.json (and same EFS mount, for the same reason: shards write to data/ on shared storage, and the merge step afterward reads all of them from there). Which script runs, and the --shard-index/--shard-count values, are set per submission via containerOverrides in statemachine/validate_corpus.asl.json, not baked in here. retryStrategy is what lets Batch retry just ONE flaky array child (e.g. a Bedrock ThrottlingException) instead of the whole array job failing and forcing Step Functions to resubmit all N shards -- safe to retry blindly because 02-06 are resumable: a retried child re-reads its own --out file first and only redoes ids it doesn't already have.",
   "jobDefinitionName": "horror-corpus-validator",
   "type": "container",
   "platformCapabilities": ["FARGATE"],
+  "retryStrategy": { "attempts": 3 },
   "containerProperties": {
     "image": "REPLACE_WITH_ECR_IMAGE_URI",
     "jobRoleArn": "REPLACE_WITH_TASK_ROLE_ARN",

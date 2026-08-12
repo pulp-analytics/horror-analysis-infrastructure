@@ -114,6 +114,20 @@ below) comes from the state machine's `$.shardCount` execution input, so
 parallelism is a per-run choice, not hardcoded: a 100-row sample run might
 use `shardCount: 4`, a full 145k-row run might use `shardCount: 100`.
 
+### Retries happen at two levels, on purpose
+
+`batch/job-definition.json` sets `retryStrategy: {attempts: 3}` -- Batch's
+own per-child retry, so a single flaky array child (a Bedrock
+`ThrottlingException`, a transient TMDB timeout) gets retried by Batch
+itself without failing the whole array job. Only if a child exhausts those
+3 attempts does the array job fail, which is what triggers the *state
+machine's* `Retry` block on the `...Shards` state -- and even then, that
+resubmits the entire array job safely, not wastefully: every array child
+re-reads its own `--out` file first (the same resumability that lets you
+re-run any of these scripts locally after an interruption), so a retried
+run only redoes ids it doesn't already have, whether the retry came from
+Batch or from Step Functions.
+
 ### `merge_shards.py`
 
 After an array job's `.sync` state returns (meaning every child finished),
