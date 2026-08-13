@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
-"""Merge N shard output files from a poster-corpus-validation AWS Batch
-array job (see docs/ARCHITECTURE.md) back into the single file the next
-stage in statemachine/validate_corpus.asl.json expects as its --in.
+"""Merge N shard output files from an AWS Batch array job (see
+docs/ARCHITECTURE.md) back into the single file the next stage in a state
+machine expects as its --in. Shared by both
+statemachine/validate_corpus.asl.json (poster-corpus-validation) and
+statemachine/compute_metrics.asl.json (poster-metrics-pipeline) -- same
+merge problem, same tool, regardless of which repo's scripts produced the
+shards.
 
-Two formats, matching the two output shapes poster-corpus-validation's
-shardable scripts (02-06) produce:
+Three formats, matching the shapes each pipeline's shardable scripts
+produce:
 
   --format csv    concatenate N CSVs with the same header into one
-                   (used for 02, 04, 05, 06's outputs)
+                   (poster-corpus-validation's 02/04/05/06; poster-metrics-
+                   pipeline's 01/02/03/04/10)
   --format json   union N {id: {...}} objects into one dict, keyed by id
-                   (used for 03_fetch_alt_titles.py's alt_titles.json --
+                   (poster-corpus-validation's 03_fetch_alt_titles.py --
                    each shard covers a disjoint set of ids, so this is a
                    plain dict union, not a deep merge)
+  --format npz    concatenate N (ids, vecs) embedding caches into one
+                   (poster-metrics-pipeline's 05_clip_embed.py and
+                   11_siglip_embed.py -- each shard is a partial
+                   {ids: int array, vecs: float16 array} .npz over a
+                   disjoint id range, same resumable-cache shape the
+                   scripts themselves read/write locally)
 
 Every shard is expected to exist -- pass either an explicit --shards list,
 or --shard-glob with --expected-count (the state machine uses the glob
@@ -24,6 +35,7 @@ having produced zero rows.
 
   python3 merge_shards.py --format csv --shards shard_0.csv shard_1.csv shard_2.csv --out merged.csv
   python3 merge_shards.py --format json --shards shard_0.json shard_1.json --out merged.json
+  python3 merge_shards.py --format npz --shards shard_0.npz shard_1.npz --out merged.npz
   python3 merge_shards.py --format csv --shard-glob 'data/shard_*_poster_verification.csv' --expected-count 20 --out merged.csv
 """
 from __future__ import annotations
@@ -33,6 +45,13 @@ import csv
 import glob
 import json
 from pathlib import Path
+
+# numpy is only imported inside merge_npz(), not at module level -- the
+# validate_corpus.asl.json Dockerfile only installs poster-corpus-
+# validation's requirements.txt (no numpy in there), and never calls
+# --format npz. Keeping the import lazy means that image doesn't need a
+# dependency it never uses, and only the compute_metrics Dockerfile (which
+# clones poster-metrics-pipeline, already requiring numpy) needs it.
 
 
 def merge_csv(shard_paths: list[Path], out_path: Path) -> int:
@@ -68,9 +87,30 @@ def merge_json(shard_paths: list[Path], out_path: Path) -> int:
     return len(merged)
 
 
+def merge_npz(shard_paths: list[Path], out_path: Path) -> int:
+    import numpy as np
+
+    ids_parts: list = []
+    vecs_parts: list = []
+    seen: set = set()
+    for p in shard_paths:
+        z = np.load(p)
+        ids = z["ids"]
+        overlap = set(int(x) for x in ids) & seen
+        if overlap:
+            raise ValueError(f"{p} has {len(overlap)} id(s) already present in an earlier shard "
+                              f"(shards should be disjoint) -- first few: {sorted(overlap)[:5]}")
+        seen.update(int(x) for x in ids)
+        ids_parts.append(ids)
+        vecs_parts.append(z["vecs"])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(out_path, ids=np.concatenate(ids_parts), vecs=np.concatenate(vecs_parts))
+    return len(seen)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--format", choices=["csv", "json"], required=True)
+    ap.add_argument("--format", choices=["csv", "json", "npz"], required=True)
     ap.add_argument("--shards", nargs="+", type=Path, help="explicit list of shard files")
     ap.add_argument("--shard-glob", help="glob pattern matching shard files, as an alternative to --shards "
                                           "(e.g. for a shard count only known at execution time)")
@@ -97,8 +137,10 @@ def main():
 
     if args.format == "csv":
         n = merge_csv(shard_paths, args.out)
-    else:
+    elif args.format == "json":
         n = merge_json(shard_paths, args.out)
+    else:
+        n = merge_npz(shard_paths, args.out)
 
     print(f"wrote {args.out} ({n} rows/ids from {len(shard_paths)} shards)")
 

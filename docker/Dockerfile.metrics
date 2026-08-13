@@ -1,0 +1,44 @@
+# Packages poster-metrics-pipeline's scripts/ for the Fargate/Batch tasks
+# that statemachine/compute_metrics.asl.json runs, plus this repo's own
+# scripts/merge_shards.py and scripts/prepare_metrics_input.py. Separate
+# image from docker/Dockerfile (the validator) on purpose: different repo,
+# different dependency stack entirely (torch/pyiqa/open_clip_torch/
+# transformers here vs. boto3-only there) -- sharing one image would mean
+# every validate_corpus task pulls a multi-GB ML image it never uses.
+#
+# Build context is THIS repo's root (for merge_shards.py and
+# prepare_metrics_input.py):
+#   docker build -t poster-metrics -f docker/Dockerfile.metrics .
+#
+# Every step in compute_metrics.asl.json (the adapter, 01-13, and the
+# merge steps) uses this same image; which script runs is decided by the
+# container command override in the ASL definition, same convention as
+# the validator image.
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin this to a commit/tag once you've settled on a version, instead of
+# always tracking main -- see docs/ARCHITECTURE.md.
+ARG METRICS_PIPELINE_REF=main
+RUN git clone --depth 1 --branch "${METRICS_PIPELINE_REF}" \
+    https://github.com/pulp-analytics/poster-metrics-pipeline.git .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY scripts/merge_shards.py /app/merge_shards.py
+COPY scripts/prepare_metrics_input.py /app/prepare_metrics_input.py
+
+# No AWS credentials/secrets needed by the running Python code at all --
+# poster-metrics-pipeline's scripts talk to TMDB's public image CDN, not
+# any AWS service, unless --posters-s3-bucket is set (optional, off by
+# default). See iam/fargate_task_role_policy_metrics.json: the task role
+# here only needs EFS access, nothing else.
+#
+# No ENTRYPOINT/CMD on purpose, same reasoning as docker/Dockerfile: every
+# task in compute_metrics.asl.json supplies its own command via
+# ContainerOverrides/containerOverrides.
+CMD ["python3", "--version"]

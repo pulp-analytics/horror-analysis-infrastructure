@@ -1,0 +1,8 @@
+{
+  "jobQueueName": "poster-metrics-shardable-queue",
+  "state": "ENABLED",
+  "priority": 1,
+  "computeEnvironmentOrder": [
+    {"order": 1, "computeEnvironment": "REPLACE_WITH_METRICS_COMPUTE_ENVIRONMENT_ARN"}
+  ]
+}

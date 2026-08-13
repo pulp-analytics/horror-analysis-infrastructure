@@ -1,0 +1,42 @@
+{
+  "_comment": "One job definition, reused for all seven shardable poster-metrics-pipeline scripts (01/02/03/04/05/10/11) -- same image as ecs/task-definition-metrics.json, same EFS mount, same reasoning as batch/job-definition.json: shards write to data/ on shared storage, the merge step afterward reads all of them from there. Higher memory than the validator's Batch job definition (3072 -> 8192) and 2 vCPU instead of 1 -- these seven scripts load real torch models (pyiqa, NIMA/InceptionV2, LAION's CLIP ViT-L/14 + MLP head, CLIP ViT-B/32, SigLIP-base) into memory per container, not just make boto3 calls. retryStrategy and resumability work exactly like the validator's: 01/02/03/04/05/10/11 already support --shard-index/--shard-count AND load_done_ids/open_for_append-style resume (or the ids-already-in-.npz check for 05/11), so a Batch-retried child re-reads its own --out first and only redoes ids it doesn't already have.",
+  "jobDefinitionName": "poster-metrics-shardable",
+  "type": "container",
+  "platformCapabilities": ["FARGATE"],
+  "retryStrategy": { "attempts": 3 },
+  "containerProperties": {
+    "image": "REPLACE_WITH_METRICS_ECR_IMAGE_URI",
+    "jobRoleArn": "REPLACE_WITH_METRICS_TASK_ROLE_ARN",
+    "executionRoleArn": "REPLACE_WITH_METRICS_EXECUTION_ROLE_ARN",
+    "resourceRequirements": [
+      {"type": "VCPU", "value": "2"},
+      {"type": "MEMORY", "value": "8192"}
+    ],
+    "networkConfiguration": {"assignPublicIp": "ENABLED"},
+    "volumes": [
+      {
+        "name": "metrics-data",
+        "efsVolumeConfiguration": {
+          "fileSystemId": "REPLACE_WITH_EFS_FILESYSTEM_ID",
+          "transitEncryption": "ENABLED",
+          "authorizationConfig": {
+            "accessPointId": "REPLACE_WITH_METRICS_EFS_ACCESS_POINT_ID",
+            "iam": "ENABLED"
+          }
+        }
+      }
+    ],
+    "mountPoints": [
+      {"sourceVolume": "metrics-data", "containerPath": "/app/data", "readOnly": false}
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/batch/poster-metrics-pipeline",
+        "awslogs-region": "REPLACE_WITH_REGION",
+        "awslogs-stream-prefix": "metrics"
+      }
+    }
+  },
+  "_gpu_note": "This is a CPU-only (FARGATE) job definition, same platform choice as the validator's, for cost-safety continuity -- see docs/COST_SAFETY.md and docs/ARCHITECTURE.md's note on why. All seven of these scripts run real neural-net inference (pyiqa/NIMA/LAION/CLIP/SigLIP) and would run meaningfully faster on a GPU-backed Batch compute environment (EC2 launch type, e.g. g4dn/g5 instances -- Fargate itself has no GPU support at all). If wall-clock time at full 145k-poster scale becomes the bottleneck, that's the documented next step, not something this design defaults to."
+}

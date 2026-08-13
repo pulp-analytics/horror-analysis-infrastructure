@@ -1,0 +1,39 @@
+{
+  "_comment": "Attach to compute_metrics.asl.json's own state machine execution role -- separate from validate_corpus.asl.json's stepfunctions_execution_role_policy.json (different state machine, different least-privilege scope, same reasoning as running the two pipelines as separate images/roles throughout). Same two .sync integrations as the validator's: ecs:RunTask for the adapter step + wave-2's six single-task scripts + the wave-1 merge steps, batch:SubmitJob for wave-1's seven array jobs.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "RunAndTrackEcsTasks",
+      "Effect": "Allow",
+      "Action": ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks"],
+      "Resource": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+      "Condition": {
+        "ArnEquals": { "ecs:cluster": "REPLACE_WITH_CLUSTER_ARN" }
+      }
+    },
+    {
+      "Sid": "SubmitAndTrackBatchArrayJobs",
+      "Effect": "Allow",
+      "Action": ["batch:SubmitJob", "batch:DescribeJobs", "batch:TerminateJob"],
+      "Resource": ["REPLACE_WITH_METRICS_JOB_DEFINITION_ARN", "REPLACE_WITH_METRICS_JOB_QUEUE_ARN"]
+    },
+    {
+      "Sid": "PassRolesToEcsAndBatch",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": ["REPLACE_WITH_METRICS_TASK_ROLE_ARN", "REPLACE_WITH_METRICS_EXECUTION_ROLE_ARN"]
+    },
+    {
+      "Sid": "EcsSyncIntegrationEvents",
+      "Effect": "Allow",
+      "Action": ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
+      "Resource": "arn:aws:events:*:*:rule/StepFunctionsGetEventsForECSTaskRule"
+    },
+    {
+      "Sid": "BatchSyncIntegrationEvents",
+      "Effect": "Allow",
+      "Action": ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
+      "Resource": "arn:aws:events:*:*:rule/StepFunctionsGetEventForBatchJobsRule"
+    }
+  ]
+}

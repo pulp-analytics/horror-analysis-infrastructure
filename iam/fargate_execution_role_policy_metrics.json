@@ -1,0 +1,26 @@
+{
+  "_comment": "Attach to the ECS EXECUTION role (executionRoleArn in ecs/task-definition-metrics.json) AND the Batch execution role (executionRoleArn in batch/job-definition-metrics.json) -- what ECS/Batch itself assumes to pull the image and set up logging, before your code runs. Same split-from-the-task-role reasoning as fargate_execution_role_policy.json. No ReadTmdbApiKeySecret statement here (unlike the validator's) -- poster-metrics-pipeline never needs a TMDB API key, it only hits TMDB's public image CDN.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PullImageFromECR",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "WriteContainerLogs",
+      "Effect": "Allow",
+      "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/ecs/poster-metrics-pipeline:*",
+        "arn:aws:logs:*:*:log-group:/batch/poster-metrics-pipeline:*"
+      ]
+    }
+  ]
+}

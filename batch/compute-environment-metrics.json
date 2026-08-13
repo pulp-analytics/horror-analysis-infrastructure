@@ -1,0 +1,13 @@
+{
+  "_comment": "Fargate-based Batch compute environment for poster-metrics-pipeline's seven shardable scripts -- same CPU-only platform as batch/compute-environment.json (the validator's), not a GPU-backed EC2 environment, for cost-safety continuity: this project's one real infrastructure incident (docs/COST_SAFETY.md) was a long-lived, un-terminated instance, and a GPU EC2 fleet is a more expensive version of exactly that risk if a compute environment or job queue is ever left scaled up. maxvCpus higher than the validator's (64 -> 128) since these seven scripts are meaningfully heavier per-container than boto3 calls. Same FARGATE_SPOT tradeoff note as the validator applies here too -- safe because resumable.",
+  "computeEnvironmentName": "poster-metrics-shardable",
+  "type": "MANAGED",
+  "state": "ENABLED",
+  "computeResources": {
+    "type": "FARGATE",
+    "maxvCpus": 128,
+    "subnets": ["REPLACE_WITH_SUBNET_ID"],
+    "securityGroupIds": ["REPLACE_WITH_SECURITY_GROUP_ID"]
+  },
+  "serviceRole": "REPLACE_WITH_BATCH_SERVICE_ROLE_ARN"
+}

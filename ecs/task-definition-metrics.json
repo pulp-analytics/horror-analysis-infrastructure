@@ -1,0 +1,46 @@
+{
+  "_comment": "Every single-task state in statemachine/compute_metrics.asl.json runs THIS task definition -- the adapter step (prepare_metrics_input.py), the 6 wave-2 scripts (06/07/08/09/12/13, which each read one already-merged embeddings .npz and do one vectorized pass over the whole corpus in seconds -- no row-level sharding needed, same reasoning as poster-corpus-validation's 07/08/09), and the merge steps for wave-1's shards. Higher memory than the validator's task-definition.json (3072 -> 6144) because loading a full clip_embeddings.npz/siglip_embeddings.npz for a 145k-poster corpus into a single process, plus pandas merges against the metrics-input CSV, uses meaningfully more RAM than poster-corpus-validation's boto3-only workload ever did.",
+  "family": "poster-metrics-single-task",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "2048",
+  "memory": "6144",
+  "executionRoleArn": "REPLACE_WITH_METRICS_EXECUTION_ROLE_ARN",
+  "taskRoleArn": "REPLACE_WITH_METRICS_TASK_ROLE_ARN",
+  "volumes": [
+    {
+      "name": "metrics-data",
+      "efsVolumeConfiguration": {
+        "fileSystemId": "REPLACE_WITH_EFS_FILESYSTEM_ID",
+        "transitEncryption": "ENABLED",
+        "authorizationConfig": {
+          "accessPointId": "REPLACE_WITH_METRICS_EFS_ACCESS_POINT_ID",
+          "iam": "ENABLED"
+        }
+      }
+    }
+  ],
+  "containerDefinitions": [
+    {
+      "name": "metrics",
+      "image": "REPLACE_WITH_METRICS_ECR_IMAGE_URI",
+      "essential": true,
+      "workingDirectory": "/app",
+      "mountPoints": [
+        {
+          "sourceVolume": "metrics-data",
+          "containerPath": "/app/data",
+          "readOnly": false
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/poster-metrics-pipeline",
+          "awslogs-region": "REPLACE_WITH_REGION",
+          "awslogs-stream-prefix": "metrics"
+        }
+      }
+    }
+  ]
+}

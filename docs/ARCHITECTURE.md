@@ -194,3 +194,101 @@ Bedrock model id — that's still true here, passed via `$.bedrockModelId`
 in the Batch array job's command. `fargate_task_role_policy.json` lists
 both Nova Pro and Nova Lite in its resource ARNs; add another model's ARN
 there if you want to swap models without changing anything else.
+
+## Extending to poster-metrics-pipeline
+
+Everything above orchestrates `poster-corpus-validation`. This section
+covers `statemachine/compute_metrics.asl.json`, which orchestrates
+`poster-metrics-pipeline`'s 13 scripts (color, perceptual quality, CLIP,
+SigLIP) as a second, downstream stage — same infrastructure pattern
+(Step Functions + Batch array jobs + Fargate + `merge_shards.py`), applied
+to a different repo with a different real dependency graph.
+
+### The connection between the two repos is real, but wasn't glued together anywhere until now
+
+`poster-corpus-validation`'s final output, `validated_corpus.csv`
+(`id,title,original_title,release_date,poster_path,...`), is almost
+exactly `poster-metrics-pipeline`'s expected `--in` schema
+(`id,title,year,poster_path`) — the only gap is `release_date` vs. `year`,
+a one-line derivation. `scripts/prepare_metrics_input.py` does exactly
+that and nothing else — verified live against the real
+`validated_corpus.csv` sample (95/95 rows converted, 0 dropped), and the
+resulting file was confirmed to run correctly through
+`poster-metrics-pipeline`'s `01_color_metrics.py` end to end. This glue
+belongs in this repo, not in either pipeline repo — neither one has a
+reason to know the other's column names on its own.
+
+### Why the split here is "all 7 scale with corpus size" vs. corpus-validation's "5 of 9 do"
+
+`poster-corpus-validation`'s `07`/`08`/`09` skip sharding because they
+only touch a small set of *candidate* rows found locally first (see
+above). `poster-metrics-pipeline` has no equivalent "small candidate set"
+step — every metric script computes something for *every* poster in the
+corpus, no exceptions. So the split here uses a different, but analogous,
+criterion: does the per-poster cost come from real model inference
+(network-bound TMDB fetch + CPU/GPU-bound neural net forward pass, the
+kind of cost that scales linearly and benefits from parallel workers) or
+from a single vectorized matrix operation over the whole corpus at once
+(the kind of cost numpy already parallelizes internally, where splitting
+across containers just adds coordination overhead for no benefit)?
+
+```
+PrepareInput (adapter, single Fargate task)
+  │
+  ├──▶ 01 (color_metrics, BATCH ARRAY)         ─┐
+  ├──▶ 02 (iqa_multi_score, BATCH ARRAY)         │
+  ├──▶ 03 (nima_score, BATCH ARRAY)              │  wave 1 -- independent
+  ├──▶ 04 (laion_aesthetic_score, BATCH ARRAY)   │  of each other, each
+  ├──▶ 10 (clip_medium, BATCH ARRAY)             │  scales with corpus size
+  ├──▶ 05 (clip_embed, BATCH ARRAY) ──▶ merge ──┐│
+  └──▶ 11 (siglip_embed, BATCH ARRAY) ─▶ merge ─┼┘
+                                                  │
+                        ┌─────────────────────────┘
+                        │
+  06/07/08/09 (single Fargate tasks, read merged clip_embeddings.npz)
+  12/13       (single Fargate tasks, read merged siglip_embeddings.npz)
+```
+
+`01`-`05` and `10`-`11` (7 scripts) each loop over every poster
+independently, fetching its image and running a real model forward pass
+(pyiqa, NIMA, LAION's CLIP ViT-L/14, CLIP ViT-B/32, or SigLIP) — the exact
+same "one row at a time inside a single process" cost profile that
+motivated sharding `poster-corpus-validation`'s 5 scripts in the first
+place, so they get the same treatment: Batch array job + merge step.
+
+`06`/`07`/`08`/`09`/`12`/`13` (6 scripts) don't touch poster images at
+all — they read one already-built embeddings cache (a few hundred
+thousand small vectors) and compute cosine similarities against a handful
+of text prototypes, a single `vecs @ prototypes.T` numpy call covering
+every poster in one process. Confirmed live in `poster-metrics-pipeline`'s
+own testing: 99 posters processed in about two seconds; the same
+operation over a 145k-poster corpus is a bigger matrix, not a slower
+per-row loop — no per-row cost to parallelize, so these run as single
+Fargate tasks, gated only on whichever embedding merge they depend on.
+
+### No final Assemble step, unlike validate_corpus
+
+`poster-corpus-validation` ends in one gate script (`10_validate_corpus.py
+--assemble-only`) that reads every branch's output and produces one
+verdict. `poster-metrics-pipeline` has no equivalent — each of its 13
+scripts computes an independent per-poster metric and writes its own
+output file (see that repo's own Scope note: no cross-metric aggregation
+happens inside it, that's a front-end/presentation concern). So
+`compute_metrics.asl.json` just ends after wave 2's `Parallel` state —
+there's nothing left to assemble.
+
+### GPU is a real option this design doesn't take, on purpose
+
+All seven wave-1 scripts run real neural-net inference and would finish
+meaningfully faster on a GPU (Fargate itself has zero GPU support at all —
+this would mean a Batch compute environment backed by EC2 GPU instances,
+e.g. the `g4dn`/`g5` families, instead of `batch/compute-environment-metrics.json`'s
+Fargate-only setup). This design defaults to CPU/Fargate anyway, for the
+same reason `docs/COST_SAFETY.md` exists: this project's one real
+infrastructure incident was a long-lived, un-terminated instance, and an
+EC2 GPU fleet left scaled up is a strictly more expensive version of that
+same risk. If wall-clock time at full 145k-poster scale turns out to be
+the actual bottleneck, switching `batch/compute-environment-metrics.json`'s
+`type` and adding GPU `resourceRequirements` to
+`batch/job-definition-metrics.json` is the documented next step — not
+something silently assumed here.

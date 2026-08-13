@@ -1,0 +1,15 @@
+{
+  "_comment": "Attach to the ECS TASK role (taskRoleArn in ecs/task-definition-metrics.json) AND the Batch job role (jobRoleArn in batch/job-definition-metrics.json) -- same permissions either way, same split-by-role reasoning as fargate_task_role_policy.json. This one is narrower than the validator's: poster-metrics-pipeline's scripts fetch posters from TMDB's public image CDN over plain HTTPS, not any AWS service, and don't need Bedrock/Comprehend/Translate at all. The only AWS permission the running Python code needs is EFS access for the shared data/ mount. If you turn on the optional --posters-s3-bucket poster cache (see poster-metrics-pipeline's utils/posters.py -- off by default), add a scoped s3:GetObject/s3:PutObject statement for that specific bucket/prefix here; don't grant account-wide S3 access.",
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "SharedDataVolume",
+      "Effect": "Allow",
+      "Action": ["elasticfilesystem:ClientMount", "elasticfilesystem:ClientWrite", "elasticfilesystem:ClientRootAccess"],
+      "Resource": "REPLACE_WITH_EFS_FILESYSTEM_ARN",
+      "Condition": {
+        "StringEquals": { "elasticfilesystem:AccessPointArn": "REPLACE_WITH_METRICS_EFS_ACCESS_POINT_ARN" }
+      }
+    }
+  ]
+}
