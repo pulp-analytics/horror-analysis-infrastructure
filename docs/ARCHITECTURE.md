@@ -10,7 +10,7 @@ Fargate, or Batch. That EC2 pattern is real, already-run, already-validated.
 
 Everything in `statemachine/`, `ecs/`, `batch/`, and `iam/` is a **new,
 forward-looking design** for running
-[horror-corpus-validation](https://github.com/pulp-analytics/horror-corpus-validation)
+[poster-corpus-validation](https://github.com/pulp-analytics/poster-corpus-validation)
 at scale — not a description of what actually ran. It exists because,
 comparing the two approaches directly:
 
@@ -19,14 +19,14 @@ comparing the two approaches directly:
   stop. A Fargate/Batch task is ephemeral by construction — there's no
   long-lived instance to forget about, and no self-termination script that
   can fail to fire.
-- `horror-corpus-validation`'s scripts already have an explicit,
+- `poster-corpus-validation`'s scripts already have an explicit,
   documented dependency graph (see its README) that its own orchestrator
   (`10_validate_corpus.py`) doesn't exploit — it runs everything
   sequentially via `subprocess.run`, one row at a time inside a single
   process, even for the full 145k-row corpus.
 
 If you just want to run the validation once or twice, use
-`horror-corpus-validation` directly — clone it, `pip install`, run
+`poster-corpus-validation` directly — clone it, `pip install`, run
 `10_validate_corpus.py`. Reach for this repo when you're running it
 repeatedly, at a scale where wall-clock parallelism and unattended
 monitoring start to matter.
@@ -94,7 +94,7 @@ shard's output.
 ## How row sharding actually works
 
 Each of the five shardable scripts takes `--shard-index`/`--shard-count`
-(added to `horror-corpus-validation` alongside this design): given the
+(added to `poster-corpus-validation` alongside this design): given the
 same `--in` file, `rows[shard_index::shard_count]` is a deterministic,
 disjoint partition — shard 3 of 20 always means the same rows, with no
 coordination needed between shards.
@@ -143,7 +143,7 @@ silently treated as "zero rows contributed."
 ## Why Fargate/Batch tasks need a shared EFS volume
 
 Both ECS tasks and Batch array children get their own throwaway container
-filesystem. `horror-corpus-validation`'s scripts hand data to each other
+filesystem. `poster-corpus-validation`'s scripts hand data to each other
 through files — that only works if every task/job sees the same
 filesystem. `ecs/task-definition.json` and `batch/job-definition.json`
 both mount the same EFS access point at `/app/data` for exactly this
@@ -189,7 +189,7 @@ up as a JSON syntax error.
 
 ## Model flexibility carries through
 
-`horror-corpus-validation`'s `04_bedrock_ocr.py --model` accepts any
+`poster-corpus-validation`'s `04_bedrock_ocr.py --model` accepts any
 Bedrock model id — that's still true here, passed via `$.bedrockModelId`
 in the Batch array job's command. `fargate_task_role_policy.json` lists
 both Nova Pro and Nova Lite in its resource ARNs; add another model's ARN

@@ -1,7 +1,7 @@
-# horror-analysis-infrastructure
+# poster-analysis-infrastructure
 
 AWS orchestration for running
-[horror-corpus-validation](https://github.com/pulp-analytics/horror-corpus-validation)
+[poster-corpus-validation](https://github.com/pulp-analytics/poster-corpus-validation)
 at scale, using Step Functions for stage ordering and **AWS Batch array
 jobs** for row-level parallelism within the five scripts that scale with
 corpus size — plus the cost-safety tooling (AWS Budgets, Cost Anomaly
@@ -22,7 +22,7 @@ explains why only 5 of the 9 scripts get row-level sharding.
 ```
 statemachine/
   validate_corpus.asl.json     Step Functions state machine -- mirrors
-                                horror-corpus-validation's real dependency
+                                poster-corpus-validation's real dependency
                                 graph; 02/03/04/05/06 run as Batch array
                                 jobs + a merge step, 01/07/08/09/Assemble
                                 as single Fargate ECS tasks
@@ -36,7 +36,7 @@ batch/
                                 script + shard index run is set per
                                 submission by the state machine
 docker/
-  Dockerfile                   Packages horror-corpus-validation's scripts/
+  Dockerfile                   Packages poster-corpus-validation's scripts/
                                 (cloned at build time) plus this repo's
                                 scripts/merge_shards.py
 iam/

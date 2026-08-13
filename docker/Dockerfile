@@ -1,9 +1,9 @@
-# Packages horror-corpus-validation's scripts/ for the Fargate/Batch tasks
+# Packages poster-corpus-validation's scripts/ for the Fargate/Batch tasks
 # that statemachine/validate_corpus.asl.json runs, plus this repo's own
 # scripts/merge_shards.py (the merge steps between an array job and the
-# next stage need it, and it isn't part of horror-corpus-validation --
+# next stage need it, and it isn't part of poster-corpus-validation --
 # that repo has no reason to know its output might get sharded).
-# horror-corpus-validation's code isn't vendored -- it's cloned at build
+# poster-corpus-validation's code isn't vendored -- it's cloned at build
 # time so the image always tracks whatever's actually on its main branch,
 # the same repo you'd `pip install -r requirements.txt` from to run it
 # locally.
@@ -25,7 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # always tracking main -- see docs/ARCHITECTURE.md.
 ARG CORPUS_VALIDATION_REF=main
 RUN git clone --depth 1 --branch "${CORPUS_VALIDATION_REF}" \
-    https://github.com/pulp-analytics/horror-corpus-validation.git .
+    https://github.com/pulp-analytics/poster-corpus-validation.git .
 
 RUN pip install --no-cache-dir -r requirements.txt
 

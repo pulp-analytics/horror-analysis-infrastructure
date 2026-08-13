@@ -1,5 +1,5 @@
 {
-  "Comment": "Runs pulp-analytics/horror-corpus-validation's scripts/01-10 respecting the real dependency graph (01→{02,03,07,08}, 02→{04,08}, 04→{05,09}, 05→06). The 5 full-corpus-scale scripts (02,03,04,05,06) run as AWS Batch array jobs, each array child self-selecting its shard via AWS_BATCH_JOB_ARRAY_INDEX, followed by a MergeShards step; 01/07/08/09/Assemble process a small/bounded row count and run as single Fargate ECS tasks instead -- see docs/ARCHITECTURE.md for why the split isn't uniform. REPLACE_WITH_* placeholders need your own resource ids.",
+  "Comment": "Runs pulp-analytics/poster-corpus-validation's scripts/01-10 respecting the real dependency graph (01→{02,03,07,08}, 02→{04,08}, 04→{05,09}, 05→06). The 5 full-corpus-scale scripts (02,03,04,05,06) run as AWS Batch array jobs, each array child self-selecting its shard via AWS_BATCH_JOB_ARRAY_INDEX, followed by a MergeShards step; 01/07/08/09/Assemble process a small/bounded row count and run as single Fargate ECS tasks instead -- see docs/ARCHITECTURE.md for why the split isn't uniform. REPLACE_WITH_* placeholders need your own resource ids.",
   "StartAt": "Enumerate",
   "States": {
     "Enumerate": {

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Merge N shard output files from a horror-corpus-validation AWS Batch
+"""Merge N shard output files from a poster-corpus-validation AWS Batch
 array job (see docs/ARCHITECTURE.md) back into the single file the next
 stage in statemachine/validate_corpus.asl.json expects as its --in.
 
-Two formats, matching the two output shapes horror-corpus-validation's
+Two formats, matching the two output shapes poster-corpus-validation's
 shardable scripts (02-06) produce:
 
   --format csv    concatenate N CSVs with the same header into one
