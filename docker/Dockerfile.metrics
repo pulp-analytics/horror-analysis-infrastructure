@@ -14,6 +14,14 @@
 # merge steps) uses this same image; which script runs is decided by the
 # container command override in the ASL definition, same convention as
 # the validator image.
+#
+# poster-metrics-pipeline's code is fetched at build time by exact commit
+# SHA (not a moving branch), so every image build is reproducible: two
+# builds with the same METRICS_PIPELINE_REF pull the exact same code,
+# regardless of what's since landed on main. Override with --build-arg
+# METRICS_PIPELINE_REF=<sha> to build against a newer commit;
+# `git ls-remote https://github.com/pulp-analytics/poster-metrics-pipeline.git main`
+# gets you the current tip when you're ready to move the pin forward.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -21,11 +29,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin this to a commit/tag once you've settled on a version, instead of
-# always tracking main -- see docs/ARCHITECTURE.md.
-ARG METRICS_PIPELINE_REF=main
-RUN git clone --depth 1 --branch "${METRICS_PIPELINE_REF}" \
-    https://github.com/pulp-analytics/poster-metrics-pipeline.git .
+# Pinned to the commit that added the faces category, 14_face_detect.py /
+# 15_face_expression.py (2026-08-12). GitHub's smart HTTP protocol supports
+# fetching by exact SHA (not just branch/tag names) for public repos, which
+# --depth 1 --branch alone does not.
+ARG METRICS_PIPELINE_REF=f193efdad8540ab820a1b8969a6d9f86ac4efc3f
+RUN git init -q . \
+    && git remote add origin https://github.com/pulp-analytics/poster-metrics-pipeline.git \
+    && git fetch --depth 1 origin "${METRICS_PIPELINE_REF}" \
+    && git checkout -q FETCH_HEAD
 
 RUN pip install --no-cache-dir -r requirements.txt
 
