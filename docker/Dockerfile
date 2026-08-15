@@ -24,11 +24,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that added the utils/tmdb_client.py + write_csv_rows
-# refactor (2026-08-14). GitHub's smart HTTP protocol supports fetching by
-# exact SHA (not just branch/tag names) for public repos, which --depth 1
-# --branch alone does not.
-ARG CORPUS_VALIDATION_REF=29ed995c2e2afa43c9ac2d937ca2b6e0c1fbde39
+# Pinned to the commit that completes the Bedrock OCR ground truth
+# (100/100) and adds 04_bedrock_ocr.py --validate (2026-08-15). GitHub's
+# smart HTTP protocol supports fetching by exact SHA (not just branch/tag
+# names) for public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=4d46cf8f43e95b619a8bf5dfaae56257e1c0b398
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
