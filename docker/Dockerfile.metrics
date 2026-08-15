@@ -29,11 +29,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that added the faces category, 14_face_detect.py /
-# 15_face_expression.py (2026-08-12). GitHub's smart HTTP protocol supports
-# fetching by exact SHA (not just branch/tag names) for public repos, which
-# --depth 1 --branch alone does not.
-ARG METRICS_PIPELINE_REF=f193efdad8540ab820a1b8969a6d9f86ac4efc3f
+# Pinned to the commit that filters the genre-classifier-vs-IMDb
+# validation to movie/tvMovie and scales it to 500 posters (2026-08-15).
+# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
+# branch/tag names) for public repos, which --depth 1 --branch alone
+# does not.
+ARG METRICS_PIPELINE_REF=20f37491b58a11942987b07d36f131eac4c1b1d9
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-metrics-pipeline.git \
     && git fetch --depth 1 origin "${METRICS_PIPELINE_REF}" \
