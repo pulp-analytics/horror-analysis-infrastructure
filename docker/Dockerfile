@@ -24,15 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that adds gate 13, content moderation: Nova +
-# Rekognition moderation, ported from the real project's own
-# nova_poster_enrich.py/rekognition_enrich.py with their real thresholds
-# (0.5 Nova, 0.4 Rekognition), plus a faithful extension extracting
-# Rekognition's nudity/suggestive labels the real script never parsed out
-# (2026-08-16). GitHub's smart HTTP protocol supports fetching by exact
-# SHA (not just branch/tag names) for public repos, which --depth 1
-# --branch alone does not.
-ARG CORPUS_VALIDATION_REF=fbe024bf260c4503d7571eac15b3a09701787e5b
+# Pinned to the commit documenting the completed poster-type human review
+# (73.1% of zero-OCR-text posters really aren't posters; painted/p_painted
+# has no real discriminative value here) and gate 13's real live run
+# (74/672 flagged, 0 errors, top hit a real notoriously extreme film,
+# flagged correctly by both engines) (2026-08-16). GitHub's smart HTTP
+# protocol supports fetching by exact SHA (not just branch/tag names) for
+# public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=48de5de5eefd2aeeab3fbc2a7a2a9b0cb0e7ca0f
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
