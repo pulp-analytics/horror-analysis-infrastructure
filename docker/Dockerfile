@@ -24,14 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that auto-loads .env (python-dotenv) from
-# utils/aws_config.py, the single place every TMDB/AWS-needing script
-# routes through -- no more manually exporting TMDB_API_KEY into the shell
-# each session. A real env var (e.g. this image's own runtime env, or CI's
-# secret) still always wins over .env (2026-08-16). GitHub's smart HTTP
-# protocol supports fetching by exact SHA (not just branch/tag names) for
-# public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=6457906901566d215b757563892f3b3b15fb53d0
+# Pinned to the commit that trims dated "found live on <date>" narrative
+# out of gates 8/9/10's docstrings -- that evidence now lives only in
+# docs/VALIDATION_LOGIC.md (with dates), so code comments describe stable
+# current behavior instead of freezing a point-in-time claim that could go
+# stale (2026-08-16). GitHub's smart HTTP protocol supports fetching by
+# exact SHA (not just branch/tag names) for public repos, which
+# --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=99c94aa49197d714bdfd0f32a66ff74cdba35813
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
