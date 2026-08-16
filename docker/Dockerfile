@@ -24,14 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that adds CI: a no-secrets-needed pytest workflow on
-# every push/PR, plus a new fixture-consistency test class that guards
-# fixture *values* (not just schema) -- would have caught the empty-
-# overview bug that silently broke gate 7's grouping key before this
-# existed. Also adds a weekly TMDB-key-gated live-drift report (2026-08-16).
-# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
-# branch/tag names) for public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=d920ac133647e85d527c7919767219c3d4c11f6f
+# Pinned to the commit that auto-loads .env (python-dotenv) from
+# utils/aws_config.py, the single place every TMDB/AWS-needing script
+# routes through -- no more manually exporting TMDB_API_KEY into the shell
+# each session. A real env var (e.g. this image's own runtime env, or CI's
+# secret) still always wins over .env (2026-08-16). GitHub's smart HTTP
+# protocol supports fetching by exact SHA (not just branch/tag names) for
+# public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=6457906901566d215b757563892f3b3b15fb53d0
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
