@@ -24,16 +24,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that live-verifies gates 7-9 against real TMDB data
-# (a real key became available this session) and fixes what broke: a
-# speculative "exclude segment ids" guard in gate 9 that would have
-# rejected the correct real answer, a stale empty-overview fixture bug in
-# gate 7's sample breaking its grouping key, and documents a real
-# limitation where gate 8's generic tiebreak picks the wrong id for a
-# poster that's actually a compilation (2026-08-16). GitHub's smart HTTP
+# Pinned to the commit that fixes a real bug in 10_validate_corpus.py, the
+# orchestrator that actually merges gates 7-9 into excluded_ids.csv: gate 8
+# (poster MD5) ran its exclusion block before gate 9 (compilation
+# collapse), so on the real Sheets of Gore pair it silently excluded the
+# correct canonical entry and kept the wrong segment -- exactly backwards.
+# Gate 9 now always runs first and its confirmed canonical ids are
+# protected from gates 7/8's exclusions (2026-08-16). GitHub's smart HTTP
 # protocol supports fetching by exact SHA (not just branch/tag names) for
 # public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=575ad48b39c4fe361b6f0c0f6d4e3f5255825898
+ARG CORPUS_VALIDATION_REF=7bbe171682091a7b6d49814494004194e0a1de67
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
