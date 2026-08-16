@@ -24,13 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that replaces gate 7's dedup tiebreaker: instead of
-# approximating the real run's unreproducible has_pipeline_metrics signal,
-# it implements a more robust imdb_id -> credits -> trailer -> popularity
-# cascade straight from TMDB's own data (2026-08-16). GitHub's smart HTTP
-# protocol supports fetching by exact SHA (not just branch/tag names) for
-# public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=d16ccc49f2cd08e61c413db45bff1bce64b70c01
+# Pinned to the commit that extends the same "build the ideal, don't port
+# an unreproducible mechanism" approach to gates 8 (poster MD5 dedup, now
+# shares gate 7's completeness cascade) and 9 (compilation collapsing, now
+# scores every TMDB search candidate instead of requiring exactly one)
+# (2026-08-16). GitHub's smart HTTP protocol supports fetching by exact SHA
+# (not just branch/tag names) for public repos, which --depth 1 --branch
+# alone does not.
+ARG CORPUS_VALIDATION_REF=f3d0e76f52b307369924cb45a422e8479b644242
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
