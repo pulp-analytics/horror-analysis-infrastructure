@@ -24,16 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that fixes a real bug in 10_validate_corpus.py, the
-# orchestrator that actually merges gates 7-9 into excluded_ids.csv: gate 8
-# (poster MD5) ran its exclusion block before gate 9 (compilation
-# collapse), so on the real Sheets of Gore pair it silently excluded the
-# correct canonical entry and kept the wrong segment -- exactly backwards.
-# Gate 9 now always runs first and its confirmed canonical ids are
-# protected from gates 7/8's exclusions (2026-08-16). GitHub's smart HTTP
-# protocol supports fetching by exact SHA (not just branch/tag names) for
-# public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=7bbe171682091a7b6d49814494004194e0a1de67
+# Pinned to the commit that adds CI: a no-secrets-needed pytest workflow on
+# every push/PR, plus a new fixture-consistency test class that guards
+# fixture *values* (not just schema) -- would have caught the empty-
+# overview bug that silently broke gate 7's grouping key before this
+# existed. Also adds a weekly TMDB-key-gated live-drift report (2026-08-16).
+# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
+# branch/tag names) for public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=d920ac133647e85d527c7919767219c3d4c11f6f
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
