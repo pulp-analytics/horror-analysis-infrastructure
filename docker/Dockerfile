@@ -24,14 +24,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that adds a "tiene texto visible" toggle to the
-# poster-type review tool: real early review data showed most zero-OCR
-# ids marked "es_poster" actually had clearly legible title text that
-# Rekognition's DetectText missed -- worth its own structured CSV column,
-# not just free-text notes (2026-08-16). GitHub's smart HTTP protocol
-# supports fetching by exact SHA (not just branch/tag names) for public
-# repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=36ff38509c2478e04757a3e6a691c4c824ca2283
+# Pinned to the commit that adds gate 13, content moderation: Nova +
+# Rekognition moderation, ported from the real project's own
+# nova_poster_enrich.py/rekognition_enrich.py with their real thresholds
+# (0.5 Nova, 0.4 Rekognition), plus a faithful extension extracting
+# Rekognition's nudity/suggestive labels the real script never parsed out
+# (2026-08-16). GitHub's smart HTTP protocol supports fetching by exact
+# SHA (not just branch/tag names) for public repos, which --depth 1
+# --branch alone does not.
+ARG CORPUS_VALIDATION_REF=fbe024bf260c4503d7571eac15b3a09701787e5b
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
