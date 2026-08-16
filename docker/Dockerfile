@@ -24,12 +24,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that runs gate 8-9 live against all 262 real
-# candidates with both Bedrock and Rekognition engines (2026-08-16).
-# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
-# branch/tag names) for public repos, which --depth 1 --branch alone
-# does not.
-ARG CORPUS_VALIDATION_REF=73893b3cd287edc2a4a252aed11805ef54a156dd
+# Pinned to the commit that retracts the gate 8-9 262-candidate
+# conclusion (the poster_path input was already post-swap, not the bug
+# it looked like) and ships the corrected input, ready for the next
+# AWS session (2026-08-16). GitHub's smart HTTP protocol supports
+# fetching by exact SHA (not just branch/tag names) for public repos,
+# which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=097a74af53d817f1feece8106595416694c03d7f
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
