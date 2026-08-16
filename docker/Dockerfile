@@ -24,14 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that adds a poster-type review tool: 2,539 real
-# catalog ids whose poster had zero OCR'd characters in the real project's
-# own poster_title_match.csv (4% of 65,107 titles) -- a candidate signal
-# an image isn't actually a movie poster, pending human review via
-# scripts/qa/build_poster_type_review_page.py (2026-08-16). GitHub's smart
-# HTTP protocol supports fetching by exact SHA (not just branch/tag names)
-# for public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=2cc4d2f365036b9b2d810ca8bb137748aaa6082e
+# Pinned to the commit that adds a "tiene texto visible" toggle to the
+# poster-type review tool: real early review data showed most zero-OCR
+# ids marked "es_poster" actually had clearly legible title text that
+# Rekognition's DetectText missed -- worth its own structured CSV column,
+# not just free-text notes (2026-08-16). GitHub's smart HTTP protocol
+# supports fetching by exact SHA (not just branch/tag names) for public
+# repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=36ff38509c2478e04757a3e6a691c4c824ca2283
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
