@@ -24,14 +24,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that extends the same "build the ideal, don't port
-# an unreproducible mechanism" approach to gates 8 (poster MD5 dedup, now
-# shares gate 7's completeness cascade) and 9 (compilation collapsing, now
-# scores every TMDB search candidate instead of requiring exactly one)
-# (2026-08-16). GitHub's smart HTTP protocol supports fetching by exact SHA
-# (not just branch/tag names) for public repos, which --depth 1 --branch
-# alone does not.
-ARG CORPUS_VALIDATION_REF=f3d0e76f52b307369924cb45a422e8479b644242
+# Pinned to the commit that live-verifies gates 7-9 against real TMDB data
+# (a real key became available this session) and fixes what broke: a
+# speculative "exclude segment ids" guard in gate 9 that would have
+# rejected the correct real answer, a stale empty-overview fixture bug in
+# gate 7's sample breaking its grouping key, and documents a real
+# limitation where gate 8's generic tiebreak picks the wrong id for a
+# poster that's actually a compilation (2026-08-16). GitHub's smart HTTP
+# protocol supports fetching by exact SHA (not just branch/tag names) for
+# public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=575ad48b39c4fe361b6f0c0f6d4e3f5255825898
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
