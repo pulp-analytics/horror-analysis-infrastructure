@@ -1,5 +1,5 @@
 {
-  "Comment": "Runs pulp-analytics/poster-corpus-validation's scripts/01-10 respecting the real dependency graph (01→{02,03,07,08}, 02→{04,08}, 04→{05,09}, 05→06). The 5 full-corpus-scale scripts (02,03,04,05,06) run as AWS Batch array jobs, each array child self-selecting its shard via AWS_BATCH_JOB_ARRAY_INDEX, followed by a MergeShards step; 01/07/08/09/Assemble process a small/bounded row count and run as single Fargate ECS tasks instead -- see docs/ARCHITECTURE.md for why the split isn't uniform. REPLACE_WITH_* placeholders need your own resource ids.",
+  "Comment": "Runs pulp-analytics/poster-corpus-validation's scripts/01-10 respecting the real dependency graph (01\u2192{02,03,07,08}, 02\u2192{04,08}, 04\u2192{05,09}, 05\u219206). The 5 full-corpus-scale scripts (02,03,04,05,06) run as AWS Batch array jobs, each array child self-selecting its shard via AWS_BATCH_JOB_ARRAY_INDEX, followed by a MergeShards step; 01/07/08/09/Assemble process a small/bounded row count and run as single Fargate ECS tasks instead -- see docs/ARCHITECTURE.md for why the split isn't uniform. REPLACE_WITH_* placeholders need your own resource ids.",
   "StartAt": "Enumerate",
   "States": {
     "Enumerate": {
@@ -11,22 +11,37 @@
         "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
-            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+            "Subnets": [
+              "REPLACE_WITH_SUBNET_ID"
+            ],
+            "SecurityGroups": [
+              "REPLACE_WITH_SECURITY_GROUP_ID"
+            ],
             "AssignPublicIp": "ENABLED"
           }
         },
         "Overrides": {
-          "ContainerOverrides": [{
-            "Name": "validator",
-            "Command.$": "States.Array('python3', 'scripts/01_tmdb_enumerate.py', '--genre', States.Format('{}', $.genre), '--start-year', States.Format('{}', $.startYear), '--end-year', States.Format('{}', $.endYear), '--limit', States.Format('{}', $.limit), '--out', $.idsPath)"
-          }]
+          "ContainerOverrides": [
+            {
+              "Name": "validator",
+              "Command.$": "States.Array('python3', 'scripts/01_tmdb_enumerate.py', '--genre', States.Format('{}', $.genre), '--start-year', States.Format('{}', $.startYear), '--end-year', States.Format('{}', $.endYear), '--limit', States.Format('{}', $.limit), '--out', $.idsPath)"
+            }
+          ]
         }
       },
-      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-      "Next": "IndependentGates"
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "IndependentGates",
+      "ResultPath": null
     },
-
     "IndependentGates": {
       "Type": "Parallel",
       "Comment": "03, 07, and the 02-rooted branch only depend on 01's output -- none of them need each other.",
@@ -38,16 +53,28 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "fetch-alt-titles",
-                "jobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/03_fetch_alt_titles.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_alt_titles.json', $.shardCount, $.idsPath, $.shardDir))"
+                "JobName": "fetch-alt-titles",
+                "JobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
+                "JobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/03_fetch_alt_titles.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-alt_titles.json', $.shardCount, $.idsPath, $.shardDir))"
+                },
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeAltTitles"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeAltTitles",
+              "ResultPath": null
             },
             "MergeAltTitles": {
               "Type": "Task",
@@ -58,20 +85,36 @@
                 "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "REPLACE_WITH_SUBNET_ID"
+                    ],
+                    "SecurityGroups": [
+                      "REPLACE_WITH_SECURITY_GROUP_ID"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "validator",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'json', '--shard-glob', States.Format('{}/shard_*_alt_titles.json', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.altTitlesPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "validator",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'json', '--shard-glob', States.Format('{}/shard-*-alt_titles.json', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.altTitlesPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -88,20 +131,36 @@
                 "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "REPLACE_WITH_SUBNET_ID"
+                    ],
+                    "SecurityGroups": [
+                      "REPLACE_WITH_SECURITY_GROUP_ID"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "validator",
-                    "Command.$": "States.Array('python3', 'scripts/07_dedupe_tmdb_metadata.py', '--in', $.idsPath, '--out', $.duplicateResolutionPath, '--cache', $.tmdbDedupeCachePath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "validator",
+                      "Command.$": "States.Array('python3', 'scripts/07_dedupe_tmdb_metadata.py', '--in', $.idsPath, '--out', $.duplicateResolutionPath, '--cache', $.tmdbDedupeCachePath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -112,16 +171,28 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "verify-poster",
-                "jobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_verify_poster_exists.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_poster_verification.csv', $.shardCount, $.idsPath, $.shardDir))"
+                "JobName": "verify-poster",
+                "JobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
+                "JobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_verify_poster_exists.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-poster_verification.csv', $.shardCount, $.idsPath, $.shardDir))"
+                },
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeVerifyPoster"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeVerifyPoster",
+              "ResultPath": null
             },
             "MergeVerifyPoster": {
               "Type": "Task",
@@ -132,20 +203,36 @@
                 "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "REPLACE_WITH_SUBNET_ID"
+                    ],
+                    "SecurityGroups": [
+                      "REPLACE_WITH_SECURITY_GROUP_ID"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "validator",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_poster_verification.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.verifiedPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "validator",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-poster_verification.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.verifiedPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "Next": "AfterVerify"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "AfterVerify",
+              "ResultPath": null
             },
             "AfterVerify": {
               "Type": "Parallel",
@@ -159,16 +246,28 @@
                       "Comment": "Highest-value script to shard: a Bedrock call per row, the slowest and most numerous step in a full run. Longer retry backoff than the other array jobs -- Bedrock throttling (ThrottlingException) under concurrent load across many array children is the most likely transient failure here.",
                       "Resource": "arn:aws:states:::batch:submitJob.sync",
                       "Parameters": {
-                        "jobName": "bedrock-ocr",
-                        "jobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
-                        "jobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
-                        "arrayProperties": { "size.$": "$.shardCount" },
-                        "containerOverrides": {
-                          "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/04_bedrock_ocr.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_vision_title_check.csv --verified {} --model {}', $.shardCount, $.idsPath, $.shardDir, $.verifiedPath, $.bedrockModelId))"
+                        "JobName": "bedrock-ocr",
+                        "JobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
+                        "JobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
+                        "ContainerOverrides": {
+                          "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/04_bedrock_ocr.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-vision_title_check.csv --verified {} --model {}', $.shardCount, $.idsPath, $.shardDir, $.verifiedPath, $.bedrockModelId))"
+                        },
+                        "ArrayProperties": {
+                          "Size.$": "$.shardCount"
                         }
                       },
-                      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 60, "MaxAttempts": 4, "BackoffRate": 2.0 }],
-                      "Next": "MergeBedrockOCR"
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 60,
+                          "MaxAttempts": 4,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "Next": "MergeBedrockOCR",
+                      "ResultPath": null
                     },
                     "MergeBedrockOCR": {
                       "Type": "Task",
@@ -179,24 +278,40 @@
                         "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                         "NetworkConfiguration": {
                           "AwsvpcConfiguration": {
-                            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                            "Subnets": [
+                              "REPLACE_WITH_SUBNET_ID"
+                            ],
+                            "SecurityGroups": [
+                              "REPLACE_WITH_SECURITY_GROUP_ID"
+                            ],
                             "AssignPublicIp": "ENABLED"
                           }
                         },
                         "Overrides": {
-                          "ContainerOverrides": [{
-                            "Name": "validator",
-                            "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_vision_title_check.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.visionPath)"
-                          }]
+                          "ContainerOverrides": [
+                            {
+                              "Name": "validator",
+                              "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-vision_title_check.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.visionPath)"
+                            }
+                          ]
                         }
                       },
-                      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-                      "Next": "AfterBedrock"
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "Next": "AfterBedrock",
+                      "ResultPath": null
                     },
                     "AfterBedrock": {
                       "Type": "Parallel",
-                      "Comment": "05→06 and 09 both only need the merged vision_title_check.csv -- neither needs the other's output.",
+                      "Comment": "05\u219206 and 09 both only need the merged vision_title_check.csv -- neither needs the other's output.",
                       "Branches": [
                         {
                           "StartAt": "ComprehendLanguageShards",
@@ -205,16 +320,28 @@
                               "Type": "Task",
                               "Resource": "arn:aws:states:::batch:submitJob.sync",
                               "Parameters": {
-                                "jobName": "comprehend-language",
-                                "jobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
-                                "jobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
-                                "arrayProperties": { "size.$": "$.shardCount" },
-                                "containerOverrides": {
-                                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/05_comprehend_language.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_language_detection.csv', $.shardCount, $.visionPath, $.shardDir))"
+                                "JobName": "comprehend-language",
+                                "JobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
+                                "JobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
+                                "ContainerOverrides": {
+                                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/05_comprehend_language.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-language_detection.csv', $.shardCount, $.visionPath, $.shardDir))"
+                                },
+                                "ArrayProperties": {
+                                  "Size.$": "$.shardCount"
                                 }
                               },
-                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-                              "Next": "MergeComprehendLanguage"
+                              "Retry": [
+                                {
+                                  "ErrorEquals": [
+                                    "States.ALL"
+                                  ],
+                                  "IntervalSeconds": 30,
+                                  "MaxAttempts": 3,
+                                  "BackoffRate": 2.0
+                                }
+                              ],
+                              "Next": "MergeComprehendLanguage",
+                              "ResultPath": null
                             },
                             "MergeComprehendLanguage": {
                               "Type": "Task",
@@ -225,35 +352,63 @@
                                 "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                                 "NetworkConfiguration": {
                                   "AwsvpcConfiguration": {
-                                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                                    "Subnets": [
+                                      "REPLACE_WITH_SUBNET_ID"
+                                    ],
+                                    "SecurityGroups": [
+                                      "REPLACE_WITH_SECURITY_GROUP_ID"
+                                    ],
                                     "AssignPublicIp": "ENABLED"
                                   }
                                 },
                                 "Overrides": {
-                                  "ContainerOverrides": [{
-                                    "Name": "validator",
-                                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_language_detection.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.languagePath)"
-                                  }]
+                                  "ContainerOverrides": [
+                                    {
+                                      "Name": "validator",
+                                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-language_detection.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.languagePath)"
+                                    }
+                                  ]
                                 }
                               },
-                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-                              "Next": "TranslateTitlesShards"
+                              "Retry": [
+                                {
+                                  "ErrorEquals": [
+                                    "States.ALL"
+                                  ],
+                                  "IntervalSeconds": 15,
+                                  "MaxAttempts": 2,
+                                  "BackoffRate": 2.0
+                                }
+                              ],
+                              "Next": "TranslateTitlesShards",
+                              "ResultPath": null
                             },
                             "TranslateTitlesShards": {
                               "Type": "Task",
                               "Resource": "arn:aws:states:::batch:submitJob.sync",
                               "Parameters": {
-                                "jobName": "translate-titles",
-                                "jobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
-                                "jobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
-                                "arrayProperties": { "size.$": "$.shardCount" },
-                                "containerOverrides": {
-                                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/06_translate_titles.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --titles {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_translated_titles.csv', $.shardCount, $.languagePath, $.idsPath, $.shardDir))"
+                                "JobName": "translate-titles",
+                                "JobQueue": "REPLACE_WITH_JOB_QUEUE_ARN",
+                                "JobDefinition": "REPLACE_WITH_JOB_DEFINITION_ARN",
+                                "ContainerOverrides": {
+                                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/06_translate_titles.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --titles {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-translated_titles.csv', $.shardCount, $.languagePath, $.idsPath, $.shardDir))"
+                                },
+                                "ArrayProperties": {
+                                  "Size.$": "$.shardCount"
                                 }
                               },
-                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-                              "Next": "MergeTranslateTitles"
+                              "Retry": [
+                                {
+                                  "ErrorEquals": [
+                                    "States.ALL"
+                                  ],
+                                  "IntervalSeconds": 30,
+                                  "MaxAttempts": 3,
+                                  "BackoffRate": 2.0
+                                }
+                              ],
+                              "Next": "MergeTranslateTitles",
+                              "ResultPath": null
                             },
                             "MergeTranslateTitles": {
                               "Type": "Task",
@@ -264,20 +419,36 @@
                                 "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                                 "NetworkConfiguration": {
                                   "AwsvpcConfiguration": {
-                                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                                    "Subnets": [
+                                      "REPLACE_WITH_SUBNET_ID"
+                                    ],
+                                    "SecurityGroups": [
+                                      "REPLACE_WITH_SECURITY_GROUP_ID"
+                                    ],
                                     "AssignPublicIp": "ENABLED"
                                   }
                                 },
                                 "Overrides": {
-                                  "ContainerOverrides": [{
-                                    "Name": "validator",
-                                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_translated_titles.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.translatedPath)"
-                                  }]
+                                  "ContainerOverrides": [
+                                    {
+                                      "Name": "validator",
+                                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-translated_titles.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.translatedPath)"
+                                    }
+                                  ]
                                 }
                               },
-                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-                              "End": true
+                              "Retry": [
+                                {
+                                  "ErrorEquals": [
+                                    "States.ALL"
+                                  ],
+                                  "IntervalSeconds": 15,
+                                  "MaxAttempts": 2,
+                                  "BackoffRate": 2.0
+                                }
+                              ],
+                              "End": true,
+                              "ResultPath": null
                             }
                           }
                         },
@@ -294,25 +465,42 @@
                                 "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                                 "NetworkConfiguration": {
                                   "AwsvpcConfiguration": {
-                                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                                    "Subnets": [
+                                      "REPLACE_WITH_SUBNET_ID"
+                                    ],
+                                    "SecurityGroups": [
+                                      "REPLACE_WITH_SECURITY_GROUP_ID"
+                                    ],
                                     "AssignPublicIp": "ENABLED"
                                   }
                                 },
                                 "Overrides": {
-                                  "ContainerOverrides": [{
-                                    "Name": "validator",
-                                    "Command.$": "States.Array('python3', 'scripts/09_collapse_compilations.py', '--in', $.visionPath, '--out', $.compilationGroupsPath, '--cache', $.compilationCachePath)"
-                                  }]
+                                  "ContainerOverrides": [
+                                    {
+                                      "Name": "validator",
+                                      "Command.$": "States.Array('python3', 'scripts/09_collapse_compilations.py', '--in', $.visionPath, '--out', $.compilationGroupsPath, '--cache', $.compilationCachePath)"
+                                    }
+                                  ]
                                 }
                               },
-                              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-                              "End": true
+                              "Retry": [
+                                {
+                                  "ErrorEquals": [
+                                    "States.ALL"
+                                  ],
+                                  "IntervalSeconds": 30,
+                                  "MaxAttempts": 3,
+                                  "BackoffRate": 2.0
+                                }
+                              ],
+                              "End": true,
+                              "ResultPath": null
                             }
                           }
                         }
                       ],
-                      "End": true
+                      "End": true,
+                      "ResultPath": null
                     }
                   }
                 },
@@ -329,32 +517,49 @@
                         "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
                         "NetworkConfiguration": {
                           "AwsvpcConfiguration": {
-                            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                            "Subnets": [
+                              "REPLACE_WITH_SUBNET_ID"
+                            ],
+                            "SecurityGroups": [
+                              "REPLACE_WITH_SECURITY_GROUP_ID"
+                            ],
                             "AssignPublicIp": "ENABLED"
                           }
                         },
                         "Overrides": {
-                          "ContainerOverrides": [{
-                            "Name": "validator",
-                            "Command.$": "States.Array('python3', 'scripts/08_dedupe_poster_md5.py', '--in', $.idsPath, '--out', $.posterMd5DuplicatesPath, '--cache', $.posterMd5CachePath, '--verified', $.verifiedPath)"
-                          }]
+                          "ContainerOverrides": [
+                            {
+                              "Name": "validator",
+                              "Command.$": "States.Array('python3', 'scripts/08_dedupe_poster_md5.py', '--in', $.idsPath, '--out', $.posterMd5DuplicatesPath, '--cache', $.posterMd5CachePath, '--verified', $.verifiedPath)"
+                            }
+                          ]
                         }
                       },
-                      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-                      "End": true
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "End": true,
+                      "ResultPath": null
                     }
                   }
                 }
               ],
-              "End": true
+              "End": true,
+              "ResultPath": null
             }
           }
         }
       ],
-      "Next": "Assemble"
+      "Next": "Assemble",
+      "ResultPath": null
     },
-
     "Assemble": {
       "Type": "Task",
       "Comment": "Only reads the files every branch above already wrote -- 10_validate_corpus.py --assemble-only.",
@@ -365,20 +570,36 @@
         "TaskDefinition": "REPLACE_WITH_TASK_DEFINITION_ARN",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
-            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+            "Subnets": [
+              "REPLACE_WITH_SUBNET_ID"
+            ],
+            "SecurityGroups": [
+              "REPLACE_WITH_SECURITY_GROUP_ID"
+            ],
             "AssignPublicIp": "ENABLED"
           }
         },
         "Overrides": {
-          "ContainerOverrides": [{
-            "Name": "validator",
-            "Command.$": "States.Array('python3', 'scripts/10_validate_corpus.py', '--assemble-only', '--genre', States.Format('{}', $.genre), '--ids-path', $.idsPath)"
-          }]
+          "ContainerOverrides": [
+            {
+              "Name": "validator",
+              "Command.$": "States.Array('python3', 'scripts/10_validate_corpus.py', '--assemble-only', '--genre', States.Format('{}', $.genre), '--ids-path', $.idsPath)"
+            }
+          ]
         }
       },
-      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-      "End": true
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "End": true,
+      "ResultPath": null
     }
   }
 }
