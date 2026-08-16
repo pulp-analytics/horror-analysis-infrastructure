@@ -24,14 +24,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that trims dated "found live on <date>" narrative
-# out of gates 8/9/10's docstrings -- that evidence now lives only in
-# docs/VALIDATION_LOGIC.md (with dates), so code comments describe stable
-# current behavior instead of freezing a point-in-time claim that could go
-# stale (2026-08-16). GitHub's smart HTTP protocol supports fetching by
-# exact SHA (not just branch/tag names) for public repos, which
-# --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=99c94aa49197d714bdfd0f32a66ff74cdba35813
+# Pinned to the commit that codifies this session's real lessons into
+# CONTRIBUTING.md: validate real-project claims against source (don't
+# approximate an unreproducible mechanism), don't ship untested robustness,
+# fixtures are code, gate precedence must be explicit, docstrings describe
+# stable behavior not point-in-time findings -- each anchored to a real
+# incident from building this repo (2026-08-16). GitHub's smart HTTP
+# protocol supports fetching by exact SHA (not just branch/tag names) for
+# public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=ec924fed29e8aa63221e2bfc635e7948135752c9
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
