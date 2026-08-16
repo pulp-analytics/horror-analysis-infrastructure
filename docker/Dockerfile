@@ -24,13 +24,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that retracts the gate 8-9 262-candidate
-# conclusion (the poster_path input was already post-swap, not the bug
-# it looked like) and ships the corrected input, ready for the next
-# AWS session (2026-08-16). GitHub's smart HTTP protocol supports
-# fetching by exact SHA (not just branch/tag names) for public repos,
-# which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=097a74af53d817f1feece8106595416694c03d7f
+# Pinned to the commit that documents the real-vs-verified provenance
+# gap for gates 8-9 (compilation collapsing, MD5 poster dedup): real
+# outcomes confirmed against the real project's own excluded_compilation.csv,
+# but the scripts that produced those files weren't found locally, so
+# both gates' exact mechanisms are honestly flagged as reconstructions,
+# not verified reproductions (2026-08-16). GitHub's smart HTTP protocol
+# supports fetching by exact SHA (not just branch/tag names) for public
+# repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=c26ff59e253dac57e6be19ce9003e70cfbcb711d
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
