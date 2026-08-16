@@ -24,12 +24,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that documents gates 5-6 chaining from Bedrock's
-# short text rather than the real project's full_ocr, live-verified
-# against real AWS (2026-08-15). GitHub's smart HTTP protocol supports
-# fetching by exact SHA (not just branch/tag names) for public repos,
-# which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=e331243c205e892259715e19d98111686cdc5de1
+# Pinned to the commit that runs gate 8-9 live against all 262 real
+# candidates with both Bedrock and Rekognition engines (2026-08-16).
+# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
+# branch/tag names) for public repos, which --depth 1 --branch alone
+# does not.
+ARG CORPUS_VALIDATION_REF=73893b3cd287edc2a4a252aed11805ef54a156dd
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
