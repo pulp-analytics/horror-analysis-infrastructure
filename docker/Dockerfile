@@ -24,15 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that codifies this session's real lessons into
-# CONTRIBUTING.md: validate real-project claims against source (don't
-# approximate an unreproducible mechanism), don't ship untested robustness,
-# fixtures are code, gate precedence must be explicit, docstrings describe
-# stable behavior not point-in-time findings -- each anchored to a real
-# incident from building this repo (2026-08-16). GitHub's smart HTTP
-# protocol supports fetching by exact SHA (not just branch/tag names) for
-# public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=ec924fed29e8aa63221e2bfc635e7948135752c9
+# Pinned to the commit that fixes AWS_DEFAULT_REGION (documented in
+# .env.example but never actually read -- now wired up in
+# utils/aws_config.get_client()) and centralizes a match-score threshold
+# and the TMDB image CDN base URL (previously hardcoded in 6 different
+# files) into utils/constants.py and utils/tmdb_client.py (2026-08-16).
+# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
+# branch/tag names) for public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=d460ae33ee23435f196fcaf40e04bb8771a5a0a4
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
