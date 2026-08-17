@@ -8,11 +8,45 @@ userdata script that runs the job, then `shutdown -h now` with
 `instance-initiated-shutdown-behavior terminate`) — not Step Functions,
 Fargate, or Batch. That EC2 pattern is real, already-run, already-validated.
 
-Everything in `statemachine/`, `ecs/`, `batch/`, and `iam/` is a **new,
-forward-looking design** for running
+Everything in `statemachine/`, `ecs/`, `batch/`, and `iam/` started as a
+**new, forward-looking design** for running
 [poster-corpus-validation](https://github.com/pulp-analytics/poster-corpus-validation)
-at scale — not a description of what actually ran. It exists because,
-comparing the two approaches directly:
+at scale — not a description of what produced the real 145,492-poster
+corpus, which used the EC2 pattern above. That design is now **live-tested
+end-to-end**: deployed into a real AWS Workshop Studio sandbox account
+(EFS + Secrets Manager + Batch compute environment/queue/job definition +
+ECS task definition + Step Functions state machine, all wired to real
+ARNs, no placeholders) and run to a real `ExecutionSucceeded`, 2026-08-16
+— `Enumerate` → the `IndependentGates` parallel branches (including two
+AWS Batch array jobs, `FetchAltTitlesShards` and `VerifyPosterShards` →
+`BedrockOCRShards` → `ComprehendLanguageShards`/`TranslateTitlesShards`) →
+`Assemble`, in ~9.6 minutes wall-clock. `Assemble`'s own CloudWatch log
+confirms real work, not just a clean exit: `{'genre': 27, 'total_input':
+5074, 'excluded': 0, 'validated': 5074, 'elapsed_seconds': 0.2}`.
+
+Getting there live-tested — and fixed — four real bugs in
+`statemachine/validate_corpus.asl.json` that no prior review had caught,
+because the design had never actually been exercised before:
+1. `Task` states had no `ResultPath`, so each ECS/Batch call's own result
+   silently replaced the flowing input, dropping fields (`$.shardCount`,
+   `$.idsPath`, ...) later states needed.
+2. `Parallel` states had the exact same problem and needed the exact same
+   fix — `IndependentGates`, `AfterVerify`, `AfterBedrock` all overwrote
+   the input with an array of each branch's own output.
+3. `batch:submitJob`'s Parameters used the API's own camelCase
+   (`jobName`/`jobQueue`/`jobDefinition`) — Step Functions' native Batch
+   integration needs PascalCase (`JobName`/`JobQueue`/`JobDefinition`).
+4. `${AWS_BATCH_JOB_ARRAY_INDEX}` (braced, for the shell to expand at
+   container runtime) collided with `States.Format`'s own `{}` placeholder
+   syntax, which has no brace-escaping — fixed by renaming the shard
+   filename convention to put a non-identifier character (`-`) around the
+   index instead of relying on braces.
+
+None of this changes the recommendation below — it's still a new design,
+still not what the real corpus run used — but "new design, never
+exercised" and "new design, live-tested and now working" are different
+claims, and this section should say which one is true. Comparing the two
+approaches directly, the reasons this design exists at all:
 
 - The real billing incident that motivated `docs/COST_SAFETY.md` was
   specifically an EC2 instance running on the wrong account with no hard
