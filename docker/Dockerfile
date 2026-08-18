@@ -24,14 +24,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit fixing 01_tmdb_enumerate.py's --limit only being
-# checked at year boundaries, not within a year's per-movie write loop --
-# a smoke-test execution with --limit 15 against a 2-year range wrote the
-# full ~5k rows TMDB returned for the first year before the outer check
-# ever fired (2026-08-18). GitHub's smart HTTP protocol supports fetching
-# by exact SHA (not just branch/tag names) for public repos, which
-# --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=b67f2325086dfcb8f004b2271919a5224e008f39
+# Pinned to the commit adding --shard-index/--shard-count to
+# 04_filter_poster_type.py, matching 06_bedrock_ocr.py's sharding support
+# -- the state machine's PosterTypeShards state has always passed those
+# flags, which this script didn't accept until now (2026-08-18). GitHub's
+# smart HTTP protocol supports fetching by exact SHA (not just branch/tag
+# names) for public repos, which --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=7a16d171e27aaa1eaeae67b2f8a6d640d48551dd
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
