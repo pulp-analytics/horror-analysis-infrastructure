@@ -39,7 +39,7 @@
           "BackoffRate": 2.0
         }
       ],
-      "Next": "FilterIsAdultShards",
+      "Next": "FetchAdultTconsts",
       "ResultPath": null
     },
     "IndependentGates": {
@@ -875,7 +875,7 @@
         },
         "JobName": "filter-isadult",
         "ContainerOverrides": {
-          "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_filter_isadult.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-isadult_filter.csv', $.shardCount, $.idsPath, $.shardDir))"
+          "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_filter_isadult.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-isadult_filter.csv --adult-tconsts /app/data/reference/adult_tconsts_isadult1.csv.gz', $.shardCount, $.idsPath, $.shardDir))"
         }
       },
       "Retry": [
@@ -953,7 +953,7 @@
           "ContainerOverrides": [
             {
               "Name": "validator",
-              "Command.$": "States.Array('python3', 'scripts/02_filter_isadult.py', '--in', $.idsPath, '--out', $.isadultPath, '--prune-out', $.prunedIdsPath)"
+              "Command.$": "States.Array('python3', 'scripts/02_filter_isadult.py', '--in', $.idsPath, '--out', $.isadultPath, '--prune-out', $.prunedIdsPath, '--adult-tconsts', '/app/data/reference/adult_tconsts_isadult1.csv.gz')"
             }
           ]
         }
@@ -971,6 +971,51 @@
       "ResultPath": null,
       "Comment": "Unsharded re-invocation against the merged --out: every id is already judged (resumable skip), so this makes zero new TMDB external_ids calls -- its only real job is the --prune-out side effect, which needs the FULL merged verdict set, not a single shard's slice. Same pattern as gate 4's BuildRescueList.",
       "Next": "IndependentGates"
+    },
+    "FetchAdultTconsts": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/horror-corpus-smoketest",
+        "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/horror-corpus-validator:1",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": [
+              "subnet-034b19433f2c7cf61"
+            ],
+            "SecurityGroups": [
+              "sg-027438978cc83fa14"
+            ],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "validator",
+              "Command": [
+                "sh",
+                "-c",
+                "mkdir -p /app/data/reference && python3 fetch_object.py horror-corpus-ec2-results-1786942548 smoketest/adult_tconsts_isadult1.csv.gz /app/data/reference/adult_tconsts_isadult1.csv.gz"
+              ]
+            }
+          ]
+        }
+      },
+      "Comment": "Refreshes gate 2's pre-filtered isAdult=1 tconst list from S3 onto EFS (small, ~1MB gzipped -- see scripts/prep_adult_tconsts.py) so FilterIsAdultShards' array children each load a small local file instead of every shard decompressing and scanning the full ~200MB title.basics.tsv.gz snapshot. Not a --prune-out-style resumable step -- always re-fetched, since it's cheap and this keeps the reference data fresh if smoketest/adult_tconsts_isadult1.csv.gz is ever regenerated.",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "FilterIsAdultShards",
+      "ResultPath": null
     }
   }
 }

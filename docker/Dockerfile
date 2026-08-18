@@ -24,13 +24,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit adding --shard-index/--shard-count to
-# 04_filter_poster_type.py, matching 06_bedrock_ocr.py's sharding support
-# -- the state machine's PosterTypeShards state has always passed those
-# flags, which this script didn't accept until now (2026-08-18). GitHub's
-# smart HTTP protocol supports fetching by exact SHA (not just branch/tag
-# names) for public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=7a16d171e27aaa1eaeae67b2f8a6d640d48551dd
+# Pinned to the commit adding --adult-tconsts to 02_filter_isadult.py --
+# a pre-filtered isAdult=1 tconst list that avoids each FilterIsAdultShards
+# array child re-scanning the full ~200MB title.basics.tsv.gz snapshot
+# (2026-08-18). GitHub's smart HTTP protocol supports fetching by exact
+# SHA (not just branch/tag names) for public repos, which --depth 1
+# --branch alone does not.
+ARG CORPUS_VALIDATION_REF=49d7a7218b45ce4c800ea69b88afb89887c6cf6b
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
@@ -40,6 +40,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY scripts/merge_shards.py /app/merge_shards.py
 COPY scripts/fetch_and_append.py /app/fetch_and_append.py
+COPY scripts/fetch_object.py /app/fetch_object.py
 
 # TMDB_API_KEY and the AWS credentials for Bedrock/Comprehend/Translate come
 # from the Fargate task definition's environment/secrets and the task role
