@@ -24,13 +24,17 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit adding --adult-tconsts to 02_filter_isadult.py --
-# a pre-filtered isAdult=1 tconst list that avoids each FilterIsAdultShards
-# array child re-scanning the full ~200MB title.basics.tsv.gz snapshot
-# (2026-08-18). GitHub's smart HTTP protocol supports fetching by exact
-# SHA (not just branch/tag names) for public repos, which --depth 1
+# Pinned to the commit adding --*-path overrides to 12_validate_corpus.py's
+# --assemble-only mode -- without them, Assemble hardcoded every gate-output
+# and deliverable path to data/sample_output/, so any Step Functions
+# execution using a run-specific output prefix (the norm here, so
+# concurrent/successive executions don't clobber each other's
+# intermediates) had its Assemble step silently read a *different*
+# execution's stale leftovers (or nothing) instead of its own real gate
+# outputs (2026-08-18). GitHub's smart HTTP protocol supports fetching by
+# exact SHA (not just branch/tag names) for public repos, which --depth 1
 # --branch alone does not.
-ARG CORPUS_VALIDATION_REF=49d7a7218b45ce4c800ea69b88afb89887c6cf6b
+ARG CORPUS_VALIDATION_REF=021a272c907795ab9d96c348b6d32a735a9ff4f9
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \

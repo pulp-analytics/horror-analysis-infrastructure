@@ -764,7 +764,7 @@
           "ContainerOverrides": [
             {
               "Name": "validator",
-              "Command.$": "States.Array('python3', 'scripts/12_validate_corpus.py', '--assemble-only', '--genre', States.Format('{}', $.genre), '--ids-path', $.idsPath)"
+              "Command.$": "States.Array('python3', 'scripts/12_validate_corpus.py', '--assemble-only', '--genre', States.Format('{}', $.genre), '--ids-path', $.idsPath, '--isadult-path', $.isadultPath, '--verified-path', $.verifiedPath, '--vision-path', $.visionPath, '--dup-path', $.duplicateResolutionPath, '--md5-path', $.posterMd5DuplicatesPath, '--comp-path', $.compilationGroupsPath, '--alt-titles-path', $.altTitlesPath, '--translated-path', $.translatedPath, '--poster-type-path', $.posterTypePath, '--rescue-swaps-path', $.rescueSwapsPath, '--validated-out', $.validatedCorpusPath, '--excluded-out', $.excludedIdsPath, '--qa-report-out', $.qaReportPath)"
             }
           ]
         }
