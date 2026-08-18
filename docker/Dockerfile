@@ -24,14 +24,16 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit documenting the completed poster-type human review
-# (73.1% of zero-OCR-text posters really aren't posters; painted/p_painted
-# has no real discriminative value here) and gate 13's real live run
-# (74/672 flagged, 0 errors, top hit a real notoriously extreme film,
-# flagged correctly by both engines) (2026-08-16). GitHub's smart HTTP
-# protocol supports fetching by exact SHA (not just branch/tag names) for
-# public repos, which --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=48de5de5eefd2aeeab3fbc2a7a2a9b0cb0e7ca0f
+# Pinned to the commit wiring gates 2 and 4 into the orchestrator for real
+# (both existed as standalone scripts but were never called by
+# 12_validate_corpus.py before this), gate 4's alternate-poster rescue
+# (gates 13-14, --mode poster-type), and gates 9/10 reordering --
+# --prune-out/--rescue-out flags shared between this repo's Python
+# orchestrator and the sibling poster-analysis-infrastructure state
+# machine (2026-08-18). GitHub's smart HTTP protocol supports fetching by
+# exact SHA (not just branch/tag names) for public repos, which
+# --depth 1 --branch alone does not.
+ARG CORPUS_VALIDATION_REF=3beb5773838a6ed1e3ee0e7afdf15298318a02a3
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
@@ -40,6 +42,7 @@ RUN git init -q . \
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY scripts/merge_shards.py /app/merge_shards.py
+COPY scripts/fetch_and_append.py /app/fetch_and_append.py
 
 # TMDB_API_KEY and the AWS credentials for Bedrock/Comprehend/Translate come
 # from the Fargate task definition's environment/secrets and the task role
