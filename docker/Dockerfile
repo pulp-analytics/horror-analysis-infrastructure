@@ -24,16 +24,14 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit wiring gates 2 and 4 into the orchestrator for real
-# (both existed as standalone scripts but were never called by
-# 12_validate_corpus.py before this), gate 4's alternate-poster rescue
-# (gates 13-14, --mode poster-type), and gates 9/10 reordering --
-# --prune-out/--rescue-out flags shared between this repo's Python
-# orchestrator and the sibling poster-analysis-infrastructure state
-# machine (2026-08-18). GitHub's smart HTTP protocol supports fetching by
-# exact SHA (not just branch/tag names) for public repos, which
+# Pinned to the commit fixing 01_tmdb_enumerate.py's --limit only being
+# checked at year boundaries, not within a year's per-movie write loop --
+# a smoke-test execution with --limit 15 against a 2-year range wrote the
+# full ~5k rows TMDB returned for the first year before the outer check
+# ever fired (2026-08-18). GitHub's smart HTTP protocol supports fetching
+# by exact SHA (not just branch/tag names) for public repos, which
 # --depth 1 --branch alone does not.
-ARG CORPUS_VALIDATION_REF=3beb5773838a6ed1e3ee0e7afdf15298318a02a3
+ARG CORPUS_VALIDATION_REF=b67f2325086dfcb8f004b2271919a5224e008f39
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \
