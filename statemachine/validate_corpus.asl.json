@@ -39,7 +39,7 @@
           "BackoffRate": 2.0
         }
       ],
-      "Next": "FilterIsAdult",
+      "Next": "FilterIsAdultShards",
       "ResultPath": null
     },
     "IndependentGates": {
@@ -505,11 +505,37 @@
                   }
                 },
                 {
-                  "StartAt": "DedupePosterMD5",
+                  "StartAt": "DedupePosterMD5Shards",
                   "States": {
-                    "DedupePosterMD5": {
+                    "DedupePosterMD5Shards": {
                       "Type": "Task",
-                      "Comment": "Not sharded -- 08's expensive part (downloading+hashing) already only runs on the ids in --in that have a poster_path, and its own --cache design defers the actual grouping to a cheap final pass, so it doesn't need Batch's array-job sharding on top of that.",
+                      "Resource": "arn:aws:states:::batch:submitJob.sync",
+                      "Parameters": {
+                        "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/horror-corpus-validator-queue",
+                        "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/horror-corpus-validator",
+                        "ArrayProperties": {
+                          "Size.$": "$.shardCount"
+                        },
+                        "JobName": "dedupe-poster-md5",
+                        "ContainerOverrides": {
+                          "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/10_dedupe_poster_md5.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --verified {} --cache {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-poster_md5_cache.csv --tmdb-cache {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-tmdb_dedupe_cache.csv --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-poster_md5_duplicates.csv', $.shardCount, $.prunedIdsPath, $.verifiedPath, $.shardDir, $.shardDir, $.shardDir))"
+                        }
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 30,
+                          "MaxAttempts": 3,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "ResultPath": null,
+                      "Next": "MergePosterMD5Cache"
+                    },
+                    "MergePosterMD5Cache": {
+                      "Type": "Task",
                       "Resource": "arn:aws:states:::ecs:runTask.sync",
                       "Parameters": {
                         "LaunchType": "FARGATE",
@@ -530,7 +556,7 @@
                           "ContainerOverrides": [
                             {
                               "Name": "validator",
-                              "Command.$": "States.Array('python3', 'scripts/10_dedupe_poster_md5.py', '--in', $.prunedIdsPath, '--out', $.posterMd5DuplicatesPath, '--cache', $.posterMd5CachePath, '--verified', $.verifiedPath)"
+                              "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-poster_md5_cache.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.posterMd5CachePath)"
                             }
                           ]
                         }
@@ -540,13 +566,54 @@
                           "ErrorEquals": [
                             "States.ALL"
                           ],
-                          "IntervalSeconds": 30,
-                          "MaxAttempts": 3,
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 2,
                           "BackoffRate": 2.0
                         }
                       ],
-                      "End": true,
-                      "ResultPath": null
+                      "ResultPath": null,
+                      "Next": "FinalDedupeGrouping"
+                    },
+                    "FinalDedupeGrouping": {
+                      "Type": "Task",
+                      "Resource": "arn:aws:states:::ecs:runTask.sync",
+                      "Parameters": {
+                        "LaunchType": "FARGATE",
+                        "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/horror-corpus-smoketest",
+                        "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/horror-corpus-validator:1",
+                        "NetworkConfiguration": {
+                          "AwsvpcConfiguration": {
+                            "Subnets": [
+                              "subnet-034b19433f2c7cf61"
+                            ],
+                            "SecurityGroups": [
+                              "sg-027438978cc83fa14"
+                            ],
+                            "AssignPublicIp": "ENABLED"
+                          }
+                        },
+                        "Overrides": {
+                          "ContainerOverrides": [
+                            {
+                              "Name": "validator",
+                              "Command.$": "States.Array('python3', 'scripts/10_dedupe_poster_md5.py', '--in', $.prunedIdsPath, '--verified', $.verifiedPath, '--cache', $.posterMd5CachePath, '--tmdb-cache', $.tmdbDedupeCachePath, '--out', $.posterMd5DuplicatesPath)"
+                            }
+                          ]
+                        }
+                      },
+                      "Retry": [
+                        {
+                          "ErrorEquals": [
+                            "States.ALL"
+                          ],
+                          "IntervalSeconds": 15,
+                          "MaxAttempts": 2,
+                          "BackoffRate": 2.0
+                        }
+                      ],
+                      "ResultPath": null,
+                      "Comment": "Unsharded re-invocation against the merged, global --cache: every poster is already hashed (resumable skip on --cache), so this makes zero new poster downloads -- its only real job is redoing the cheap local group-by-md5 step correctly across shard boundaries (MD5 dupes can span shards, unlike gate 4/2's per-id verdicts). --tmdb-cache is intentionally a fresh path, not merged from shard tmdb-caches: completeness signals only matter for ids in a *correctly, globally* computed duplicate group, which shard-level runs couldn't know -- recomputing them here is cheap (duplicate groups are a tiny fraction of the corpus) and guarantees correctness over reusing possibly-wrong shard-level signals. See 10_dedupe_poster_md5.py's own --shard-count docstring.",
+                      "End": true
                     }
                   }
                 }
@@ -715,47 +782,6 @@
       "End": true,
       "ResultPath": null
     },
-    "FilterIsAdult": {
-      "Type": "Task",
-      "Resource": "arn:aws:states:::ecs:runTask.sync",
-      "Comment": "Gate 2, the cheapest possible cut -- runs sequentially before IndependentGates (not as a sibling branch) because its --prune-out is what every downstream gate's --in switches to. Safe to prune early: isAdult has no interaction with gate 11's compilation-protection override, unlike gates 9/10 below. See docs/RESULTS.md, 'Gate 9/10/11 sequencing.'",
-      "Parameters": {
-        "LaunchType": "FARGATE",
-        "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/horror-corpus-smoketest",
-        "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/horror-corpus-validator:1",
-        "NetworkConfiguration": {
-          "AwsvpcConfiguration": {
-            "Subnets": [
-              "subnet-034b19433f2c7cf61"
-            ],
-            "SecurityGroups": [
-              "sg-027438978cc83fa14"
-            ],
-            "AssignPublicIp": "ENABLED"
-          }
-        },
-        "Overrides": {
-          "ContainerOverrides": [
-            {
-              "Name": "validator",
-              "Command.$": "States.Array('python3', 'scripts/02_filter_isadult.py', '--in', $.idsPath, '--out', $.isadultPath, '--prune-out', $.prunedIdsPath)"
-            }
-          ]
-        }
-      },
-      "Retry": [
-        {
-          "ErrorEquals": [
-            "States.ALL"
-          ],
-          "IntervalSeconds": 20,
-          "MaxAttempts": 2,
-          "BackoffRate": 2.0
-        }
-      ],
-      "ResultPath": null,
-      "Next": "IndependentGates"
-    },
     "FindAlternatePosters": {
       "Type": "Task",
       "Resource": "arn:aws:states:::ecs:runTask.sync",
@@ -837,6 +863,114 @@
       ],
       "ResultPath": null,
       "Next": "Assemble"
+    },
+    "FilterIsAdultShards": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/horror-corpus-validator-queue",
+        "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/horror-corpus-validator",
+        "ArrayProperties": {
+          "Size.$": "$.shardCount"
+        },
+        "JobName": "filter-isadult",
+        "ContainerOverrides": {
+          "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_filter_isadult.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-isadult_filter.csv', $.shardCount, $.idsPath, $.shardDir))"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "ResultPath": null,
+      "Next": "MergeIsAdult"
+    },
+    "MergeIsAdult": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/horror-corpus-smoketest",
+        "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/horror-corpus-validator:1",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": [
+              "subnet-034b19433f2c7cf61"
+            ],
+            "SecurityGroups": [
+              "sg-027438978cc83fa14"
+            ],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "validator",
+              "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-isadult_filter.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.isadultPath)"
+            }
+          ]
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "ResultPath": null,
+      "Next": "BuildPruneList"
+    },
+    "BuildPruneList": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::ecs:runTask.sync",
+      "Parameters": {
+        "LaunchType": "FARGATE",
+        "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/horror-corpus-smoketest",
+        "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/horror-corpus-validator:1",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "Subnets": [
+              "subnet-034b19433f2c7cf61"
+            ],
+            "SecurityGroups": [
+              "sg-027438978cc83fa14"
+            ],
+            "AssignPublicIp": "ENABLED"
+          }
+        },
+        "Overrides": {
+          "ContainerOverrides": [
+            {
+              "Name": "validator",
+              "Command.$": "States.Array('python3', 'scripts/02_filter_isadult.py', '--in', $.idsPath, '--out', $.isadultPath, '--prune-out', $.prunedIdsPath)"
+            }
+          ]
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "ResultPath": null,
+      "Comment": "Unsharded re-invocation against the merged --out: every id is already judged (resumable skip), so this makes zero new TMDB external_ids calls -- its only real job is the --prune-out side effect, which needs the FULL merged verdict set, not a single shard's slice. Same pattern as gate 4's BuildRescueList.",
+      "Next": "IndependentGates"
     }
   }
 }
