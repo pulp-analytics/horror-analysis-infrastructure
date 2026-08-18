@@ -994,16 +994,12 @@
           "ContainerOverrides": [
             {
               "Name": "validator",
-              "Command": [
-                "sh",
-                "-c",
-                "mkdir -p /app/data/reference && python3 fetch_object.py horror-corpus-ec2-results-1786942548 smoketest/adult_tconsts_isadult1.csv.gz /app/data/reference/adult_tconsts_isadult1.csv.gz"
-              ]
+              "Command.$": "States.Array('sh', '-c', States.Format('mkdir -p /app/data/reference && python3 fetch_object.py {} {} /app/data/reference/adult_tconsts_isadult1.csv.gz', $.adultTconstsBucket, $.adultTconstsKey))"
             }
           ]
         }
       },
-      "Comment": "Refreshes gate 2's pre-filtered isAdult=1 tconst list from S3 onto EFS (small, ~1MB gzipped -- see scripts/prep_adult_tconsts.py) so FilterIsAdultShards' array children each load a small local file instead of every shard decompressing and scanning the full ~200MB title.basics.tsv.gz snapshot. Not a --prune-out-style resumable step -- always re-fetched, since it's cheap and this keeps the reference data fresh if smoketest/adult_tconsts_isadult1.csv.gz is ever regenerated.",
+      "Comment": "Refreshes gate 2's pre-filtered isAdult=1 tconst list from $.adultTconstsBucket/$.adultTconstsKey (see scripts/prep_adult_tconsts.py and docs/AWS_SETUP.md, 'Gate 2 reference data' for how to build and publish your own copy -- this is NOT bundled in the image or repo, every deployment points at its own bucket) onto EFS (small, ~1MB gzipped -- see scripts/prep_adult_tconsts.py) so FilterIsAdultShards' array children each load a small local file instead of every shard decompressing and scanning the full ~200MB title.basics.tsv.gz snapshot. Not a --prune-out-style resumable step -- always re-fetched, since it's cheap and this keeps the reference data fresh if smoketest/adult_tconsts_isadult1.csv.gz is ever regenerated.",
       "Retry": [
         {
           "ErrorEquals": [

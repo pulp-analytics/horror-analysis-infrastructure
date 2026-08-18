@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git ca-certific
 # outputs (2026-08-18). GitHub's smart HTTP protocol supports fetching by
 # exact SHA (not just branch/tag names) for public repos, which --depth 1
 # --branch alone does not.
-ARG CORPUS_VALIDATION_REF=021a272c907795ab9d96c348b6d32a735a9ff4f9
+ARG CORPUS_VALIDATION_REF=1938b0a
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-corpus-validation.git \
     && git fetch --depth 1 origin "${CORPUS_VALIDATION_REF}" \

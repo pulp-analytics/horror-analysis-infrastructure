@@ -122,15 +122,33 @@ PERSONAL_ACCOUNT_ID=<id> AWS_PROFILE=<profile> bash scripts/preflight_check.sh
 PERSONAL_ACCOUNT_ID=<id> NOTIFICATION_EMAIL=<email> AWS_PROFILE=<admin profile> \
   bash scripts/setup_cost_safety.sh   # one-time
 
-# 5. start an execution -- shardCount controls how many parallel Batch
-#    array children run per shardable stage (02,03,04,05,06); shardDir is
-#    a scratch subdirectory on the shared EFS mount for shard files before
-#    they're merged
+# 5. build and publish gate 2's isAdult reference data -- NOT bundled in
+#    the image or either repo, every deployment publishes its own copy.
+#    See poster-corpus-validation's docs/AWS_SETUP.md, "Optional: IMDb
+#    dataset for 02_filter_isadult.py":
+python3 prep_adult_tconsts.py --basics /path/to/title.basics.tsv.gz \
+    --out /tmp/adult_tconsts_isadult1.csv.gz
+aws s3 cp /tmp/adult_tconsts_isadult1.csv.gz s3://<your-bucket>/<your-key>
+#    -- your Fargate/Batch task role needs s3:GetObject on that bucket/key
+#    (see iam/fargate_task_role_policy.json); pass the bucket/key below.
+
+# 6. start an execution -- shardCount controls how many parallel Batch
+#    array children run per shardable stage (02,03,04,05,06,09,10); shardDir
+#    is a scratch subdirectory on the shared EFS mount for shard files
+#    before they're merged. Every *Path field below is where that gate's
+#    real output lives for THIS execution -- Assemble only sees the real
+#    data if these match what the other steps actually wrote (a stale/
+#    reused prefix from a different execution silently produces a
+#    validated_corpus.csv with zero real exclusions instead of erroring).
 aws stepfunctions start-execution --state-machine-arn <arn> --input '{
   "genre": 27, "startYear": 2020, "endYear": 2026, "limit": 100,
   "shardCount": 4,
-  "idsPath": "data/sample_input/sample_100_ids.csv",
-  "shardDir": "data/shards",
+  "idsPath": "data/sample_output/ids.csv",
+  "shardDir": "data/sample_output/shards",
+  "adultTconstsBucket": "<your-bucket>",
+  "adultTconstsKey": "<your-key>",
+  "isadultPath": "data/sample_output/isadult_filter.csv",
+  "prunedIdsPath": "data/sample_output/ids_post_isadult.csv",
   "verifiedPath": "data/sample_output/poster_verification.csv",
   "altTitlesPath": "data/sample_output/alt_titles.json",
   "visionPath": "data/sample_output/vision_title_check.csv",
@@ -142,9 +160,34 @@ aws stepfunctions start-execution --state-machine-arn <arn> --input '{
   "tmdbDedupeCachePath": "data/sample_output/.tmdb_dedupe_cache.csv",
   "posterMd5CachePath": "data/sample_output/.poster_md5_cache.csv",
   "compilationCachePath": "data/sample_output/.compilation_search_cache.csv",
+  "posterTypePath": "data/sample_output/poster_type_filter.csv",
+  "rescueCandidatesPath": "data/sample_output/poster_type_rescue_candidates.csv",
+  "rescueVariantsDir": "data/posters_multi_poster_type",
+  "rescueCatalogPath": "data/sample_output/poster_type_rescue_catalog.csv",
+  "rescueScoresPath": "data/sample_output/poster_type_rescue_scores.csv",
+  "rescueSwapsPath": "data/sample_output/poster_type_rescue_swaps.csv",
+  "validatedCorpusPath": "data/sample_output/validated_corpus.csv",
+  "excludedIdsPath": "data/sample_output/excluded_ids.csv",
+  "qaReportPath": "data/sample_output/qa_report.json",
   "bedrockModelId": "us.amazon.nova-pro-v1:0"
 }'
 ```
+
+Every `*Path` field is a full, real EFS path (mounted at `/app/data` in
+every task, so these are relative to that) -- there's no default or
+fallback for a missing one. A real execution once ran with a subset of
+these paths left off `Assemble`'s command (only `--ids-path` was passed;
+`12_validate_corpus.py --assemble-only` silently fell back to a fixed
+`data/sample_output/*` default for everything else), and the execution
+still reported `SUCCEEDED` -- it read *some* gate's leftover outputs at
+that default path, just not this run's, and produced a
+`validated_corpus.csv` with none of this run's real exclusions. Nothing
+about that failure mode is visible from the execution status alone; only
+checking `validated_corpus.csv`/`excluded_ids.csv` against the run's own
+intermediate files catches it. Two concurrent or successive executions
+should use different prefixes (e.g. `data/run-<id>/...`) so they don't
+read or clobber each other's intermediates -- the state machine has no
+isolation of its own.
 
 For a full 145k-row run, `shardCount` is the main lever: more shards means
 more concurrent Batch array children, bounded in practice by Bedrock/TMDB
