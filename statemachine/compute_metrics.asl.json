@@ -1,5 +1,5 @@
 {
-  "Comment": "Runs pulp-analytics/poster-metrics-pipeline's scripts/01-13 downstream of validate_corpus.asl.json: PrepareInput adapts poster-corpus-validation's validated_corpus.csv into metrics-pipeline's id/title/year/poster_path schema (see scripts/prepare_metrics_input.py), then two waves. Wave 1 (01/02/03/04/05/10/11) are the seven scripts that scale with corpus size -- each loops over every poster independently doing real per-poster model inference (pyiqa/NIMA/LAION/CLIP/SigLIP), so each runs as a Batch array job + a merge step, same pattern as validate_corpus.asl.json's shardable scripts. Wave 2 (06/07/08/09/12/13) each read one already-merged embeddings cache (05's clip_embeddings.npz or 11's siglip_embeddings.npz) and do a single vectorized pass over the whole corpus in seconds -- no per-row cost to shard, same reasoning validate_corpus.asl.json uses for 07/08/09 -- so they run as single Fargate ECS tasks, gated only on the specific wave-1 merge their --embeddings argument depends on (06/07/08/09 wait on MergeClipEmbed; 12/13 wait on MergeSiglipEmbed). REPLACE_WITH_* placeholders need your own resource ids -- see docs/ARCHITECTURE.md.",
+  "Comment": "Runs pulp-analytics/poster-metrics-pipeline's scripts/01-21 downstream of validate_corpus.asl.json: PrepareInput adapts poster-corpus-validation's validated_corpus.csv into metrics-pipeline's id/title/year/poster_path schema (see scripts/prepare_metrics_input.py), then two waves. Wave 1 (01/02/03/04/05/10/11, plus 14/16/17/18/19/20/21 added when faces/composition/depth/saliency/pose/creature-weapon were ported) are the fourteen scripts that scale with corpus size -- each loops over every poster independently doing real per-poster model inference or per-poster CV analysis, so each runs as a Batch array job + a merge step, same pattern as validate_corpus.asl.json's shardable scripts. Wave 2 (06/07/08/09/12/13, plus 15 added alongside 14) each read one already-merged wave-1 output (05's clip_embeddings.npz, 11's siglip_embeddings.npz, or 14's merged face_detect.csv) and do a single pass over the whole corpus in seconds -- no per-row cost to shard, same reasoning validate_corpus.asl.json uses for 07/08/09 -- so they run as single Fargate ECS tasks, gated only on the specific wave-1 merge their input argument depends on (06/07/08/09 wait on MergeClipEmbed; 12/13 wait on MergeSiglipEmbed; 15 waits on MergeFaceDetect). REPLACE_WITH_* placeholders need your own resource ids -- see docs/ARCHITECTURE.md.",
   "StartAt": "PrepareInput",
   "States": {
     "PrepareInput": {
@@ -8,26 +8,41 @@
       "Resource": "arn:aws:states:::ecs:runTask.sync",
       "Parameters": {
         "LaunchType": "FARGATE",
-        "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-        "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+        "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+        "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
-            "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-            "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+            "Subnets": [
+              "subnet-034b19433f2c7cf61"
+            ],
+            "SecurityGroups": [
+              "sg-027438978cc83fa14"
+            ],
             "AssignPublicIp": "ENABLED"
           }
         },
         "Overrides": {
-          "ContainerOverrides": [{
-            "Name": "metrics",
-            "Command.$": "States.Array('python3', 'prepare_metrics_input.py', '--in', $.validatedCorpusPath, '--out', $.metricsInputPath)"
-          }]
+          "ContainerOverrides": [
+            {
+              "Name": "metrics",
+              "Command.$": "States.Array('python3', 'prepare_metrics_input.py', '--in', $.validatedCorpusPath, '--out', $.metricsInputPath)"
+            }
+          ]
         }
       },
-      "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-      "Next": "ComputePerPosterMetrics"
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 15,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "ComputePerPosterMetrics",
+      "ResultPath": null
     },
-
     "ComputePerPosterMetrics": {
       "Type": "Parallel",
       "Comment": "Wave 1 -- the seven scripts that scale with corpus size, none depending on each other or on anything but PrepareInput's output. Each branch is <Script>Shards (batch:submitJob.sync, array) followed by Merge<Script> (ecs:runTask.sync running merge_shards.py) -- csv format for 01/02/03/04/10, npz format for 05/11's embedding caches.",
@@ -39,40 +54,68 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "color-metrics",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/01_color_metrics.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_color.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "color-metrics",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/01_color_metrics.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-color.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeColorMetrics"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeColorMetrics",
+              "ResultPath": null
             },
             "MergeColorMetrics": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_color.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.colorPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-color.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.colorPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -83,40 +126,68 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "iqa-multi-score",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_iqa_multi_score.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_iqa.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "iqa-multi-score",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/02_iqa_multi_score.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-iqa.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeIqa"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeIqa",
+              "ResultPath": null
             },
             "MergeIqa": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_iqa.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.iqaPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-iqa.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.iqaPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -127,40 +198,68 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "nima-score",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/03_nima_score.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_nima.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "nima-score",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/03_nima_score.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-nima.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeNima"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeNima",
+              "ResultPath": null
             },
             "MergeNima": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_nima.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.nimaPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-nima.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.nimaPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -171,40 +270,68 @@
               "Type": "Task",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "laion-aesthetic-score",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/04_laion_aesthetic_score.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_laion.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "laion-aesthetic-score",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/04_laion_aesthetic_score.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-laion.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeLaion"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeLaion",
+              "ResultPath": null
             },
             "MergeLaion": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_laion.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.laionPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-laion.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.laionPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -216,40 +343,68 @@
               "Comment": "10_clip_medium.py embeds fresh (doesn't read 05's cache -- see its own docstring), but it's still a per-poster CSV output, same shard/merge shape as 01-04, not npz like 05/11.",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "clip-medium",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/10_clip_medium.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_medium.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "clip-medium",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/10_clip_medium.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-medium.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeMedium"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeMedium",
+              "ResultPath": null
             },
             "MergeMedium": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard_*_medium.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.mediumPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-medium.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.mediumPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -261,40 +416,68 @@
               "Comment": "Gates wave 2's 06/07/08/09 -- none of them can run until the merged clip_embeddings.npz exists.",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "clip-embed",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/05_clip_embed.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_clip_embed.npz', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "clip-embed",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/05_clip_embed.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-clip_embed.npz', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeClipEmbed"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeClipEmbed",
+              "ResultPath": null
             },
             "MergeClipEmbed": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'npz', '--shard-glob', States.Format('{}/shard_*_clip_embed.npz', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.clipEmbeddingsPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'npz', '--shard-glob', States.Format('{}/shard-*-clip_embed.npz', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.clipEmbeddingsPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -306,47 +489,582 @@
               "Comment": "Gates wave 2's 12/13 -- neither can run until the merged siglip_embeddings.npz exists. Independent of ClipEmbedShards -- 768-d SigLIP space, not interchangeable with CLIP's 512-d cache.",
               "Resource": "arn:aws:states:::batch:submitJob.sync",
               "Parameters": {
-                "jobName": "siglip-embed",
-                "jobQueue": "REPLACE_WITH_METRICS_JOB_QUEUE_ARN",
-                "jobDefinition": "REPLACE_WITH_METRICS_JOB_DEFINITION_ARN",
-                "arrayProperties": { "size.$": "$.shardCount" },
-                "containerOverrides": {
-                  "command.$": "States.Array('sh', '-c', States.Format('python3 scripts/11_siglip_embed.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard_${AWS_BATCH_JOB_ARRAY_INDEX}_siglip_embed.npz', $.shardCount, $.metricsInputPath, $.shardDir))"
+                "JobName": "siglip-embed",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/11_siglip_embed.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-siglip_embed.npz', $.shardCount, $.metricsInputPath, $.shardDir))"
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 3, "BackoffRate": 2.0 }],
-              "Next": "MergeSiglipEmbed"
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeSiglipEmbed",
+              "ResultPath": null
             },
             "MergeSiglipEmbed": {
               "Type": "Task",
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'npz', '--shard-glob', States.Format('{}/shard_*_siglip_embed.npz', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.siglipEmbeddingsPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'npz', '--shard-glob', States.Format('{}/shard-*-siglip_embed.npz', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.siglipEmbeddingsPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "FaceDetectShards",
+          "States": {
+            "FaceDetectShards": {
+              "Type": "Task",
+              "Comment": "Gates wave 2's FaceExpression -- it can't run until the merged face_detect.csv exists.",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "face-detect",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/14_face_detect.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-face_detect.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeFaceDetect",
+              "ResultPath": null
+            },
+            "MergeFaceDetect": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-face_detect.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.faceDetectPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "CompositionShards",
+          "States": {
+            "CompositionShards": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "geometric-composition",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/16_geometric_composition.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-composition.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeComposition",
+              "ResultPath": null
+            },
+            "MergeComposition": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-composition.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.compositionPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "DepthShards",
+          "States": {
+            "DepthShards": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "depth-estimation",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/17_depth_estimation.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-depth.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeDepth",
+              "ResultPath": null
+            },
+            "MergeDepth": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-depth.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.depthPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "SaliencyShards",
+          "States": {
+            "SaliencyShards": {
+              "Type": "Task",
+              "Comment": "18_saliency_prediction.py sets PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python itself at import time -- see that script's module docstring and docs/RESULTS.md, 'Saliency,' in poster-metrics-pipeline -- so no extra env/command handling is needed here to avoid the protobuf crash it works around.",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "saliency-prediction",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/18_saliency_prediction.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-saliency.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeSaliency",
+              "ResultPath": null
+            },
+            "MergeSaliency": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-saliency.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.saliencyPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "PoseShards",
+          "States": {
+            "PoseShards": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "pose-dynamism",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/19_pose_dynamism.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-pose.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergePose",
+              "ResultPath": null
+            },
+            "MergePose": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-pose.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.posePath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "CreatureWeaponOwlv2Shards",
+          "States": {
+            "CreatureWeaponOwlv2Shards": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "creature-weapon-owlv2",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/20_creature_weapon_owlv2.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-creature_weapon_owlv2.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeCreatureWeaponOwlv2",
+              "ResultPath": null
+            },
+            "MergeCreatureWeaponOwlv2": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-creature_weapon_owlv2.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.creatureWeaponOwlv2Path)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "CreatureWeaponDinoShards",
+          "States": {
+            "CreatureWeaponDinoShards": {
+              "Type": "Task",
+              "Comment": "Runs the exact same creature/weapon vocabulary as CreatureWeaponOwlv2Shards on a second, independent zero-shot detector (Grounding DINO) -- deliberately not conditioned on OWLv2's output in any way, so the two branches run fully in parallel here. Agreement between creatureWeaponOwlv2Path and creatureWeaponDinoPath's outputs is the real signal for this category -- see poster-metrics-pipeline's docs/RESULTS.md, 'Creature/weapon detection.'",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "creature-weapon-dino",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/poster-metrics-shardable-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/poster-metrics-shardable",
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                },
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/21_creature_weapon_dino.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-creature_weapon_dino.csv', $.shardCount, $.metricsInputPath, $.shardDir))"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeCreatureWeaponDino",
+              "ResultPath": null
+            },
+            "MergeCreatureWeaponDino": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-creature_weapon_dino.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.creatureWeaponDinoPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         }
       ],
-      "Next": "ComputeSemanticAnalyses"
+      "Next": "ComputeSemanticAnalyses",
+      "ResultPath": null
     },
-
     "ComputeSemanticAnalyses": {
       "Type": "Parallel",
       "Comment": "Wave 2 -- 06/07/08/09 read the merged clip_embeddings.npz, 12/13 read the merged siglip_embeddings.npz. Each is a single Fargate ECS task: reading one .npz and computing cosine similarities over the whole corpus is a vectorized numpy op that finishes in seconds regardless of corpus size, so there's no per-row cost here to shard -- same reasoning validate_corpus.asl.json uses for 07/08/09. No further merge step: unlike poster-corpus-validation, poster-metrics-pipeline has no final Assemble/gate script -- each of these writes its own independent output file and the pipeline just ends here.",
@@ -359,24 +1077,40 @@
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'scripts/06_clip_census.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.censusPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/06_clip_census.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.censusPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -388,24 +1122,40 @@
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'scripts/07_clip_fear_axis.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.fearAxisPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/07_clip_fear_axis.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.fearAxisPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -417,24 +1167,40 @@
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'scripts/08_clip_typography_axis.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.typographyPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/08_clip_typography_axis.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.typographyPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -446,24 +1212,40 @@
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'scripts/09_clip_genre_classifier.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.genreClassifierPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/09_clip_genre_classifier.py', '--in', $.metricsInputPath, '--embeddings', $.clipEmbeddingsPath, '--out', $.genreClassifierPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -475,24 +1257,40 @@
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'scripts/12_siglip_fear_axis.py', '--in', $.metricsInputPath, '--embeddings', $.siglipEmbeddingsPath, '--out', $.siglipFearAxisPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/12_siglip_fear_axis.py', '--in', $.metricsInputPath, '--embeddings', $.siglipEmbeddingsPath, '--out', $.siglipFearAxisPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         },
@@ -505,29 +1303,92 @@
               "Resource": "arn:aws:states:::ecs:runTask.sync",
               "Parameters": {
                 "LaunchType": "FARGATE",
-                "Cluster": "REPLACE_WITH_CLUSTER_ARN",
-                "TaskDefinition": "REPLACE_WITH_METRICS_TASK_DEFINITION_ARN",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
                 "NetworkConfiguration": {
                   "AwsvpcConfiguration": {
-                    "Subnets": ["REPLACE_WITH_SUBNET_ID"],
-                    "SecurityGroups": ["REPLACE_WITH_SECURITY_GROUP_ID"],
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
                     "AssignPublicIp": "ENABLED"
                   }
                 },
                 "Overrides": {
-                  "ContainerOverrides": [{
-                    "Name": "metrics",
-                    "Command.$": "States.Array('python3', 'scripts/13_siglip_reanalysis.py', '--in', $.metricsInputPath, '--embeddings', $.siglipEmbeddingsPath, '--census-out', $.siglipCensusPath, '--typography-out', $.siglipTypographyPath, '--genre-out', $.siglipGenreClassifierPath)"
-                  }]
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/13_siglip_reanalysis.py', '--in', $.metricsInputPath, '--embeddings', $.siglipEmbeddingsPath, '--census-out', $.siglipCensusPath, '--typography-out', $.siglipTypographyPath, '--genre-out', $.siglipGenreClassifierPath)"
+                    }
+                  ]
                 }
               },
-              "Retry": [{ "ErrorEquals": ["States.ALL"], "IntervalSeconds": 15, "MaxAttempts": 2, "BackoffRate": 2.0 }],
-              "End": true
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
+            }
+          }
+        },
+        {
+          "StartAt": "FaceExpression",
+          "States": {
+            "FaceExpression": {
+              "Type": "Task",
+              "Comment": "Reads MergeFaceDetect's face_detect.csv (one row per detected face box) and runs CLIP zero-shot expression classification per face -- doesn't support --shard-index/--shard-count (see poster-metrics-pipeline's 15_face_expression.py), same category as 06-09/12-13: a single pass over an already-small, already-merged upstream file, not a per-poster loop over the full corpus.",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/poster-metrics-pipeline",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/poster-metrics-single-task:2",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "metrics",
+                      "Command.$": "States.Array('python3', 'scripts/15_face_expression.py', '--in', $.metricsInputPath, '--faces', $.faceDetectPath, '--out', $.faceExpressionPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "End": true,
+              "ResultPath": null
             }
           }
         }
       ],
-      "End": true
+      "End": true,
+      "ResultPath": null
     }
   }
 }

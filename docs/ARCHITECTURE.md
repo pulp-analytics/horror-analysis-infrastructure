@@ -326,3 +326,117 @@ the actual bottleneck, switching `batch/compute-environment-metrics.json`'s
 `type` and adding GPU `resourceRequirements` to
 `batch/job-definition-metrics.json` is the documented next step — not
 something silently assumed here.
+
+## `compute_metrics.asl.json`, extended and live-tested (2026-08-19)
+
+Everything above described `compute_metrics.asl.json` covering
+`poster-metrics-pipeline`'s scripts 01-13 as a "new design, never
+exercised" — the same caveat the top of this document makes about
+`validate_corpus.asl.json` before *its* live test. That's no longer true
+for either state machine. When `poster-metrics-pipeline` grew scripts
+14-21 (faces, geometric composition, depth, saliency, pose,
+creature/weapon detection — see that repo's own README/docs/RESULTS.md),
+`compute_metrics.asl.json` was extended to match (14 wave-1 branches now,
+up from 7; `FaceExpression` added as an 7th wave-2 branch, gated on
+`MergeFaceDetect` instead of an embeddings merge) — real new
+infrastructure (ECR repo, EFS filesystem/access point, IAM roles, Batch
+compute environment/queue/job definition, ECS cluster/task definition,
+state machine), deployed into the same Workshop Studio sandbox account as
+the validator, and run to a real `ExecutionSucceeded` on
+`poster-metrics-pipeline`, 2026-08-19, ~12 minutes wall-clock for an
+8-poster sample — every one of the 22 output files landed on EFS with a
+real row per poster (composition scores, depth maps, pose keypoints,
+face boxes/expressions, saliency peaks, creature/weapon detections with
+real bounding boxes, etc.), confirmed by reading them back off EFS
+through a one-off verification ECS task, not just trusting a green
+Step Functions status.
+
+**ARM64, not x86_64**: `poster-metrics-pipeline`'s dependency stack
+(torch, tensorflow, transformers, ultralytics, pyiqa) took over 55
+minutes of wall-clock just for `pip install` when built for `linux/amd64`
+on Apple Silicon via QEMU emulation — bad enough that the emulated build
+wedged the local Docker daemon entirely partway through and needed a full
+Docker Desktop restart to recover. Fargate has supported ARM64 (Graviton)
+for years, so the fix was building natively for `arm64` instead — no
+emulation, and Graviton is generally cheaper on Fargate too. This means
+`ecs/task-definition-metrics.json`'s live-deployed task definition and
+`batch/job-definition-metrics.json`'s live-deployed job definition both
+carry `"runtimePlatform": {"cpuArchitecture": "ARM64", ...}`, which
+their checked-in templates don't (same "template stays generic, deployed
+reality documented here" pattern as everything else in this file) — copy
+that block in if you rebuild this from the templates.
+
+**Real bugs found getting there, same spirit as the four already listed
+above for `validate_corpus.asl.json`** — this ASL had never actually been
+exercised before, so it silently carried the same classes of bug, plus
+two new ones specific to the image:
+
+5. **Missing `ResultPath`, same as bug #1** — every `Task`/`Parallel`
+   state in `compute_metrics.asl.json` was missing `ResultPath`, so each
+   ECS/Batch call's own result (a large ECS task-description object)
+   silently replaced the flowing state input instead of being discarded,
+   the exact same failure mode bug #1 above describes for
+   `validate_corpus.asl.json`. Fixed identically: `"ResultPath": null`
+   on all 38 `Task`/`Parallel` states.
+6. **Batch `submitJob` camelCase, same as bug #3** — `jobName`/
+   `jobQueue`/`jobDefinition`/`arrayProperties`/`command` (the Batch API's
+   own casing) instead of Step Functions' required
+   `JobName`/`JobQueue`/`JobDefinition`/`ArrayProperties`/`Command.$`.
+   `aws stepfunctions validate-state-machine-definition` catches this
+   directly (`SCHEMA_VALIDATION_FAILED`) — worth running before any live
+   deploy, not just before *this* one.
+7. **`${AWS_BATCH_JOB_ARRAY_INDEX}` brace collision, same as bug #4** —
+   identical to `validate_corpus.asl.json`'s fix: dropped the braces
+   (`$AWS_BATCH_JOB_ARRAY_INDEX`) and switched the shard filename
+   convention from `shard_${...}_name` (braces plus an adjacent
+   underscore — `States.Format`'s intrinsic can't parse the braces, and
+   even unbraced, a literal underscore right after the variable name
+   would make bash look for a differently-named variable) to
+   `shard-$AWS_BATCH_JOB_ARRAY_INDEX-name` (dashes, which aren't valid in
+   a bash identifier, so the variable name ends there unambiguously).
+8. **`opencv-python` vs. `opencv-python-headless`, new to this image** —
+   `requirements.txt` lists plain `opencv-python` (for `14_face_detect.py`'s
+   YuNet), but something else in the graph (`ultralytics`, transitively,
+   for `19_pose_dynamism.py`) pulls in `opencv-python-headless` too — both
+   packages write into the *same* `site-packages/cv2/` path, so whichever
+   installs last physically wins on disk regardless of what either
+   package's own metadata claims. Here the GUI build won, and since
+   `python:3.12-slim` has no X11 libs, anything that imports `cv2` (e.g.
+   `17_depth_estimation.py`'s torch.hub-loaded MiDaS transform) crashed
+   with `ImportError: libxcb.so.1: cannot open shared object file`.
+   `pip uninstall -y opencv-python` alone made it worse — one package's
+   uninstall deleted the shared `cv2/` directory outright, breaking
+   *every* script that imports `cv2` (`ModuleNotFoundError: No module
+   named 'cv2'`) — the fix needed a second step, force-reinstalling the
+   headless build afterward so `cv2/`'s actual files come back.
+9. **`opencv-contrib-python-headless`, not plain `-headless`** — one
+   more layer: `16_geometric_composition.py`'s
+   `cv2.saliency.StaticSaliencySpectralResidual_create()` lives in
+   OpenCV's *contrib* modules, which plain `opencv-python-headless`
+   doesn't include at all (`module 'cv2' has no attribute 'saliency'`) —
+   never surfaced until bug #8 was fixed and this code path was finally
+   reachable. `opencv-contrib-python-headless` is a strict superset (core
+   + contrib, still no GUI deps), so it replaces `opencv-python-headless`
+   outright rather than needing both. See `docker/Dockerfile.metrics`'s
+   own comments for the exact live-tested reasoning on both.
+10. **`ModuleNotFoundError: No module named 'pkg_resources'`, new to this
+    image** — `02_iqa_multi_score.py`'s `clipiqa` metric (via `pyiqa`)
+    imports the `openai-clip` package (`import clip`, distinct from
+    `open_clip_torch`, also present here for 05/11's CLIP/SigLIP
+    scripts), whose vendored `clip.py` does `from pkg_resources import
+    packaging` — a legacy idiom recent `setuptools` (84.0.0 here) no
+    longer supports, having dropped `pkg_resources` per PEP 632. Fixed by
+    pinning `setuptools<81` as an explicit post-install step, restoring
+    `pkg_resources` without touching `openai-clip`'s own (unmaintained
+    upstream) source.
+
+Bugs 8-10 all live as extra `RUN` layers appended *after*
+`RUN pip install -r requirements.txt` in `docker/Dockerfile.metrics`, on
+purpose: Docker's build cache keys each layer off everything before it,
+so as long as `requirements.txt`'s content and the pinned
+`METRICS_PIPELINE_REF` don't change, that one `pip install` layer (the
+single most expensive step in this whole image, well over 30 minutes on
+its own) stays cached and reused across rebuilds — each of bugs 8-10 was
+found and fixed with a rebuild that only re-ran its own new small layer
+(seconds, not tens of minutes), not the full install, because none of
+them required touching anything upstream of it.

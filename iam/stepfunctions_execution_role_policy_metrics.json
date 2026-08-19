@@ -24,16 +24,11 @@
       "Resource": ["REPLACE_WITH_METRICS_TASK_ROLE_ARN", "REPLACE_WITH_METRICS_EXECUTION_ROLE_ARN"]
     },
     {
-      "Sid": "EcsSyncIntegrationEvents",
+      "Sid": "EcsAndBatchSyncIntegrationEvents",
       "Effect": "Allow",
+      "Comment": "Resource: * here, not scoped to the two well-known managed-rule ARNs -- live-tested (2026-08-18): scoping this the same way validate_corpus.asl.json's original policy did (two specific rule ARNs) failed with 'not authorized to create managed-rule' at CreateStateMachine time. The same unscoped Resource: * this repo's real, deployed horror-corpus-validator-statemachine role already uses fixes it -- see stepfunctions_execution_role_policy.json.",
       "Action": ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
-      "Resource": "arn:aws:events:*:*:rule/StepFunctionsGetEventsForECSTaskRule"
-    },
-    {
-      "Sid": "BatchSyncIntegrationEvents",
-      "Effect": "Allow",
-      "Action": ["events:PutTargets", "events:PutRule", "events:DescribeRule"],
-      "Resource": "arn:aws:events:*:*:rule/StepFunctionsGetEventForBatchJobsRule"
+      "Resource": "*"
     }
   ]
 }

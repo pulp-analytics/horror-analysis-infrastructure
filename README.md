@@ -16,7 +16,9 @@ Two state machines, chained by data, not by a Step Functions call:
   `validated_corpus.csv` as its input (via `scripts/prepare_metrics_input.py`,
   a small schema adapter — see the Structure section) and orchestrates
   [poster-metrics-pipeline](https://github.com/pulp-analytics/poster-metrics-pipeline)'s
-  scripts 01-13 on top of it.
+  scripts 01-21 on top of it (color/quality/CLIP/SigLIP, then faces,
+  geometric composition, depth, saliency, pose, and creature/weapon
+  detection).
 
 Part of the [Pulp Analytics](https://github.com/pulp-analytics) horror poster
 analysis project ("The Anatomy of Fear").
@@ -35,14 +37,17 @@ statemachine/
                                 05/06 as Batch array jobs + a merge step,
                                 01/07/08/09/Assemble as single Fargate
                                 ECS tasks
-  compute_metrics.asl.json     poster-metrics-pipeline's 01-13, downstream
-                                of the above; 01/02/03/04/05/10/11 (every
-                                script that scales with corpus size) as
-                                Batch array jobs + a merge step, 06/07/08/
-                                09/12/13 (read one merged embeddings cache,
-                                vectorized, seconds regardless of corpus
-                                size) as single Fargate ECS tasks -- no
-                                final Assemble, this pipeline has none
+  compute_metrics.asl.json     poster-metrics-pipeline's 01-21, downstream
+                                of the above; 01/02/03/04/05/10/11 plus 14/
+                                16/17/18/19/20/21 (every script that scales
+                                with corpus size, including faces/
+                                composition/depth/saliency/pose/creature-
+                                weapon) as Batch array jobs + a merge step,
+                                06/07/08/09/12/13 plus 15 (read one merged
+                                upstream output, vectorized, seconds
+                                regardless of corpus size) as single
+                                Fargate ECS tasks -- no final Assemble,
+                                this pipeline has none
 ecs/
   task-definition.json         Fargate task def for validate_corpus's
                                 single-task steps

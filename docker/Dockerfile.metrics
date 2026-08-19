@@ -29,18 +29,61 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Pinned to the commit that filters the genre-classifier-vs-IMDb
-# validation to movie/tvMovie and scales it to 500 posters (2026-08-15).
-# GitHub's smart HTTP protocol supports fetching by exact SHA (not just
-# branch/tag names) for public repos, which --depth 1 --branch alone
-# does not.
-ARG METRICS_PIPELINE_REF=20f37491b58a11942987b07d36f131eac4c1b1d9
+# Pinned to the commit unblocking saliency prediction (protobuf's
+# pure-Python backend workaround) -- the tip of the branch that ported
+# faces/composition/depth/saliency/pose/creature-weapon (scripts 14-21),
+# all of which statemachine/compute_metrics.asl.json now orchestrates
+# (2026-08-18). GitHub's smart HTTP protocol supports fetching by exact
+# SHA (not just branch/tag names) for public repos, which --depth 1
+# --branch alone does not.
+ARG METRICS_PIPELINE_REF=48786b41ea580dbd45aa775896d9289b1ef0c2f3
 RUN git init -q . \
     && git remote add origin https://github.com/pulp-analytics/poster-metrics-pipeline.git \
     && git fetch --depth 1 origin "${METRICS_PIPELINE_REF}" \
     && git checkout -q FETCH_HEAD
 
 RUN pip install --no-cache-dir -r requirements.txt
+
+# requirements.txt's opencv-python>=4.8 (for 14_face_detect.py's YuNet) pulls
+# in the GUI-capable build; something else in the dependency graph (observed:
+# ultralytics, for 19_pose_dynamism.py) transitively pulls in opencv-python-
+# headless too -- both packages write into the SAME site-packages/cv2/ path,
+# so whichever installs last physically overwrites the other's files on disk
+# (their separate pip RECORDs each still claim ownership, but only one
+# package's files actually exist afterward). Live-tested (2026-08-18) in two
+# steps: (1) the GUI build's files were the ones present, and since
+# python:3.12-slim has no X11 libs, torch.hub-loaded MiDaS's `import cv2`
+# (17_depth_estimation.py) failed with "ImportError: libxcb.so.1: cannot
+# open shared object file"; (2) `pip uninstall -y opencv-python` alone then
+# deleted the shared cv2/ directory entirely (both packages' files lived at
+# the same paths), breaking every script that imports cv2 at all --
+# "ModuleNotFoundError: No module named 'cv2'". The fix needs both steps:
+# uninstall the GUI build, then force-reinstall headless so cv2/'s actual
+# files come back. Headless has 100% of the CV functionality any script here
+# uses (YuNet's FaceDetectorYN included -- it isn't GUI-dependent), Fargate
+# never has a display to show a window on regardless, and this keeps the
+# image smaller than apt-get installing libxcb1 and the rest of X11 would.
+#
+# opencv-contrib-python-headless, not plain opencv-python-headless: live-
+# tested (2026-08-19), 16_geometric_composition.py's cv2.saliency.
+# StaticSaliencySpectralResidual_create() lives in OpenCV's "contrib"
+# modules, not core -- plain headless has no cv2.saliency attribute at
+# all. -contrib- is a strict superset (core + contrib in one package), so
+# it replaces opencv-python-headless outright rather than stacking with it.
+RUN pip uninstall -y opencv-python \
+    && pip install --no-cache-dir --force-reinstall opencv-contrib-python-headless
+
+# 02_iqa_multi_score.py's clipiqa metric (pyiqa) imports the openai-clip
+# package (distinct from open_clip_torch, also installed here for 05/11's
+# CLIP/SigLIP scripts), whose vendored clip.py does `from pkg_resources
+# import packaging` -- a legacy idiom pkg_resources itself used to support.
+# Live-tested (2026-08-18): recent setuptools (84.0.0 here) dropped
+# pkg_resources entirely (PEP 632 cleanup), so that import now hard-fails
+# with "ModuleNotFoundError: No module named 'pkg_resources'" the first
+# time any script actually loads a pyiqa clipiqa-family metric. Pinning
+# setuptools back below the version that removed it restores pkg_resources
+# without touching openai-clip's own (unmaintained upstream) source.
+RUN pip install --no-cache-dir "setuptools<81"
 
 COPY scripts/merge_shards.py /app/merge_shards.py
 COPY scripts/prepare_metrics_input.py /app/prepare_metrics_input.py
