@@ -138,7 +138,9 @@ aws s3 cp /tmp/adult_tconsts_isadult1.csv.gz s3://<your-bucket>/<your-key>
 #    (see iam/fargate_task_role_policy.json); pass the bucket/key below.
 
 # 6. start an execution -- shardCount controls how many parallel Batch
-#    array children run per shardable stage (02,03,04,05,06,09,10); shardDir
+#    array children run per shardable stage (02,03,04,05,06,09,10, and now
+#    16 -- see docs/ARCHITECTURE.md's note on this list's staleness);
+#    shardDir
 #    is a scratch subdirectory on the shared EFS mount for shard files
 #    before they're merged. Every *Path field below is where that gate's
 #    real output lives for THIS execution -- Assemble only sees the real
@@ -171,6 +173,7 @@ aws stepfunctions start-execution --state-machine-arn <arn> --input '{
   "rescueCatalogPath": "data/sample_output/poster_type_rescue_catalog.csv",
   "rescueScoresPath": "data/sample_output/poster_type_rescue_scores.csv",
   "rescueSwapsPath": "data/sample_output/poster_type_rescue_swaps.csv",
+  "celebrityVerificationPath": "data/sample_output/celebrity_verification.csv",
   "validatedCorpusPath": "data/sample_output/validated_corpus.csv",
   "excludedIdsPath": "data/sample_output/excluded_ids.csv",
   "qaReportPath": "data/sample_output/qa_report.json",

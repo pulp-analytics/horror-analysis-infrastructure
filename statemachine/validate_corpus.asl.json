@@ -1,5 +1,5 @@
 {
-  "Comment": "Runs pulp-analytics/poster-corpus-validation's scripts/01-10 respecting the real dependency graph (01\u2192{02,03,07,08}, 02\u2192{04,08}, 04\u2192{05,09}, 05\u219206). The 5 full-corpus-scale scripts (02,03,04,05,06) run as AWS Batch array jobs, each array child self-selecting its shard via AWS_BATCH_JOB_ARRAY_INDEX, followed by a MergeShards step; 01/07/08/09/Assemble process a small/bounded row count and run as single Fargate ECS tasks instead -- see docs/ARCHITECTURE.md for why the split isn't uniform. REPLACE_WITH_* placeholders need your own resource ids.",
+  "Comment": "Runs pulp-analytics/poster-corpus-validation's scripts/01-10 respecting the real dependency graph (01\u2192{02,03,07,08}, 02\u2192{04,08}, 04\u2192{05,09}, 05\u219206). The 5 full-corpus-scale scripts (02,03,04,05,06) run as AWS Batch array jobs, each array child self-selecting its shard via AWS_BATCH_JOB_ARRAY_INDEX, followed by a MergeShards step; 01/07/08/09/Assemble process a small/bounded row count and run as single Fargate ECS tasks instead -- see docs/ARCHITECTURE.md for why the split isn't uniform. Gate 16 (celebrity verification, added later) runs as a 6th independent Batch-array branch inside IndependentGates, same shape as gate 4 -- its output isn't yet consumed by Assemble, same as gate 15. NOTE: this comment and docs/ARCHITECTURE.md's dependency diagram predate gates 2/4/13/14/16 and the 02-13\u219203-14 renumbering; the actual States below are current, the prose describing them here is not -- trust the JSON over this comment for anything not about gate 16. REPLACE_WITH_* placeholders need your own resource ids.",
   "StartAt": "Enumerate",
   "States": {
     "Enumerate": {
@@ -734,6 +734,80 @@
               ],
               "ResultPath": null,
               "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "VerifyCelebritiesShards",
+          "States": {
+            "VerifyCelebritiesShards": {
+              "Type": "Task",
+              "Comment": "Gate 16: same shape as gate 4 (a Bedrock + Rekognition call per row), no dependency on any other gate's output -- fetches poster_path itself from $.prunedIdsPath, same as gates 4/6.",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "verify-celebrities",
+                "JobQueue": "arn:aws:batch:us-east-1:833717394750:job-queue/horror-corpus-validator-queue",
+                "JobDefinition": "arn:aws:batch:us-east-1:833717394750:job-definition/horror-corpus-validator",
+                "ContainerOverrides": {
+                  "Command.$": "States.Array('sh', '-c', States.Format('python3 scripts/16_verify_celebrities.py --shard-index $AWS_BATCH_JOB_ARRAY_INDEX --shard-count {} --in {} --out {}/shard-$AWS_BATCH_JOB_ARRAY_INDEX-celebrity_verification.csv --model {}', $.shardCount, $.prunedIdsPath, $.shardDir, $.bedrockModelId))"
+                },
+                "ArrayProperties": {
+                  "Size.$": "$.shardCount"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 4,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "Next": "MergeVerifyCelebrities",
+              "ResultPath": null
+            },
+            "MergeVerifyCelebrities": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::ecs:runTask.sync",
+              "Parameters": {
+                "LaunchType": "FARGATE",
+                "Cluster": "arn:aws:ecs:us-east-1:833717394750:cluster/horror-corpus-smoketest",
+                "TaskDefinition": "arn:aws:ecs:us-east-1:833717394750:task-definition/horror-corpus-validator:1",
+                "NetworkConfiguration": {
+                  "AwsvpcConfiguration": {
+                    "Subnets": [
+                      "subnet-034b19433f2c7cf61"
+                    ],
+                    "SecurityGroups": [
+                      "sg-027438978cc83fa14"
+                    ],
+                    "AssignPublicIp": "ENABLED"
+                  }
+                },
+                "Overrides": {
+                  "ContainerOverrides": [
+                    {
+                      "Name": "validator",
+                      "Command.$": "States.Array('python3', 'merge_shards.py', '--format', 'csv', '--shard-glob', States.Format('{}/shard-*-celebrity_verification.csv', $.shardDir), '--expected-count', States.Format('{}', $.shardCount), '--out', $.celebrityVerificationPath)"
+                    }
+                  ]
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 15,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 2.0
+                }
+              ],
+              "ResultPath": null,
+              "End": true,
+              "Comment": "Not yet consumed by Assemble (12_validate_corpus.py --assemble-only has no --celebrity-path flag) -- same as gate 15's content_moderation.csv, this is a flagged-for-review output, not an automatic exclusion signal. See poster-corpus-validation's docs/VALIDATION_GATES.md, Gate 16."
             }
           }
         }

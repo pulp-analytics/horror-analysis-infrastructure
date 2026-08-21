@@ -105,6 +105,16 @@ same as the earlier stage-only design.
 
 ## The dependency graph, mapped to Step Functions states
 
+**Stale numbering note**: this diagram predates poster-corpus-validation's
+02-13→03-14 renumbering and the later additions of gates 2, 4, 13, 14, and
+16 -- it still describes the shape of the graph accurately (enumerate →
+verify → {ocr → {comprehend→translate, collapse_compilations},
+dedupe_md5}, plus the two originally-independent branches merging into
+Assemble), just under the old numbers. Trust
+`statemachine/validate_corpus.asl.json` itself over this diagram for the
+current gate numbers and for gates 2/4/13/14/16, which this diagram
+doesn't show at all.
+
 ```
 01 (enumerate)
   │
